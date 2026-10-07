@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Unidot</AssemblyName>
+    <RootNamespace>Unidot</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>unidot</ToolCommandName>
+    <PackageId>Net.BITKit.Unidot</PackageId>
+    <Version>0.3.0</Version>
+    <Description>Independent C# build and deployment CLI for Mono Unity Players.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Authors>CortexCore</Authors>
+    <RepositoryUrl>https://github.com/CortexCore/Net.BITKit.Unidot</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/CortexCore/Net.BITKit.Unidot</PackageProjectUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Unidot.Tests" />
+    <None Include="../../README.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="README.md" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="LICENSE" />
+  </ItemGroup>
+</Project>

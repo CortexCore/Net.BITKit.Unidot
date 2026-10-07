@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "productName": "My Game",
+  "unityProject": "D:/Games/MyGame.Unity",
+  "player": "D:/Games/MyGame.Build/MyGame.exe",
+  "unityEditor": "C:/Program Files/Unity/Hub/Editor/2022.3.62f3/Editor",
+  "platform": "WindowsStandalone64",
+  "apiProfile": "unity-4.8",
+  "languageVersion": "9.0",
+  "development": false,
+  "assemblies": ["Game.Core", "Game.Unity"],
+  "defines": [],
+  "sourceRoots": [],
+  "buildRoots": ["Assets/Artists/Scripts"],
+  "referenceMode": "player",
+  "compilerArguments": [],
+  "analyzers": [],
+  "unityIlppPlugins": [],
+  "postProcessors": {}
+}

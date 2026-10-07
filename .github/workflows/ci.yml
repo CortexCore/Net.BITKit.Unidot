@@ -1,0 +1,48 @@
+name: Windows build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        run: dotnet build Unidot.sln -c Release --verbosity minimal
+
+      - name: Tests without Unity installation
+        run: dotnet run --project tests/Unidot.Tests -c Release --no-build
+
+      - name: Publish CLI directory
+        run: dotnet publish src/Unidot -c Release --no-restore -o artifacts/unidot
+
+      - name: Pack .NET Tool
+        run: dotnet pack src/Unidot -c Release --no-build -o artifacts/packages
+
+      - name: Verify local package installation
+        shell: pwsh
+        run: |
+          dotnet tool install --tool-path artifacts/tool-smoke Net.BITKit.Unidot --configfile .github/nuget-smoke.config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./artifacts/tool-smoke/unidot.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./artifacts/tool-smoke/unidot.exe --help
+          exit $LASTEXITCODE
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unidot-windows
+          path: |
+            artifacts/unidot/**
+            artifacts/packages/*.nupkg

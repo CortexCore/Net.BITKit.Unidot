@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+.unidot/
+unidot.json
+*.user
+.vs/
+.idea/
+artifacts/
