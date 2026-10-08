@@ -33,6 +33,7 @@ internal static class Program
         var cli = Arguments.Parse(args);
         if (cli.Command is "help" or "--help" or "-h" || cli.Has("help")) { Help(); return 0; }
         if (cli.Command is "--version" or "version") { Console.WriteLine("Unidot " + ToolVersion); return 0; }
+        if (cli.Command == "workspace") return await WorkspaceManager.ExecuteAsync(cli, cancellationToken);
         if (cli.Command == "link")
         {
             await PlayerSources.LinkAsync(cli.Value("source") ?? throw new UnidotException("link requires --source <directory>."), cli.Value("path") ?? "Src/Artists/Scripts", cancellationToken);
@@ -40,17 +41,25 @@ internal static class Program
         }
         if (cli.Command == "init") return Initialize(cli);
         var config = Configuration.Load(cli.Value("config"), cli.Value("src"), cli.Value("unity-editor"));
+        config.Verbose = cli.Has("verbose");
+        WorkspaceManager.Validate(config);
+        if (cli.Has("no-shared")) config.SharedCompilation = false;
+        if (cli.Has("isolated-ilpp")) config.ReuseIlppHost = false;
         if (cli.Value("unity-editor") is { } editor) config.UnityEditor = Path.GetFullPath(editor);
-        var player = PlayerLayout.Discover(config.Player);
+        var backend = cli.Value("backend") ?? config.RunBackend;
+        if (backend is not ("exe" or "native")) throw new UnidotException("--backend must be exe or native.");
+        var player = PlayerLayout.Discover(config.Player, requireExecutable: cli.Command != "run" || backend == "exe", allowIl2cpp: cli.Command == "run" && cli.Has("no-build"));
+        if (cli.Command is "generate" or "build" or "run" or "watch") PlayerAgentInstructions.Ensure(config, player);
         if (cli.Command == "ilpp") return IlPostProcessing.Execute(config, cli);
-        if (cli.Command == "run" && cli.Has("no-build")) return await PlayerSession.RunAsync(config, player, cli.PlayerArguments, cli.Value("log-file"), cancellationToken);
+        if (cli.Command == "ilpp-worker") return await IlPostProcessing.WorkerAsync(config, cli, cancellationToken);
+        if (cli.Command == "run" && cli.Has("no-build")) return await RunSessionsAsync(config, player, cli, null, cancellationToken);
         if (cli.Command == "run" && PlayerRuntime.IsRunning(player.Executable)) throw new UnidotException("Player is already running. Close it before rebuilding and launching.");
         if (cli.Command == "restore") { Deployment.Restore(config, player, cli.Value("backup")); return 0; }
         if (cli.Command == "audit") { Deployment.Audit(config, player); return 0; }
         var toolchain = UnityToolchain.Discover(config);
-        Console.WriteLine($"Unity {toolchain.Version} | {config.Platform} | {player.ManagedDirectory}");
+        if (config.Verbose || cli.Command is "graph" or "generate") Console.WriteLine($"Unity {toolchain.Version} | {config.Platform} | {player.ManagedDirectory}");
         var graph = AssemblyGraph.Scan(config, toolchain);
-        foreach (var warning in graph.Warnings) Console.Error.WriteLine("Warning: " + warning);
+        if (cli.Command is "graph" or "generate") foreach (var warning in graph.Warnings) Console.Error.WriteLine("Warning: " + warning);
         var resolver = new ReferenceResolver(config, graph, player);
         var options = new BuildOptions(!cli.Has("no-dependencies"), !cli.Has("no-deploy"), cli.Has("force"), cli.Has("keep-going"));
         var targets = SelectTargets(cli, config, graph, resolver);
@@ -68,12 +77,42 @@ internal static class Program
                 var result = await new BuildEngine(config, toolchain, graph, player).BuildAsync(targets, options, cancellationToken);
                 return result.Failures?.Count > 0 ? 1 : 0;
             case "run":
-                await new BuildEngine(config, toolchain, graph, player).BuildAsync(targets, new(!cli.Has("no-dependencies"), Force: cli.Has("force")), cancellationToken);
-                return await PlayerSession.RunAsync(config, player, cli.PlayerArguments, cli.Value("log-file"), cancellationToken);
+                var preparation = 0;
+                async Task PrepareAsync(CancellationToken token)
+                {
+                    if (preparation++ > 0)
+                    {
+                        graph = AssemblyGraph.Scan(config, toolchain);
+                        targets = SelectTargets(cli, config, graph, new(config, graph, player));
+                    }
+                    await new BuildEngine(config, toolchain, graph, player).BuildAsync(targets, new(!cli.Has("no-dependencies"), Force: cli.Has("force")), token);
+                }
+                return await RunSessionsAsync(config, player, cli, PrepareAsync, cancellationToken);
             case "watch":
                 await WatchAsync(config, toolchain, player, cli, graph, cancellationToken);
                 return 0;
             default: throw new UnidotException($"Unknown command '{cli.Command}'. Run unidot --help.");
+        }
+    }
+
+    private static async Task<int> RunSessionsAsync(Configuration config, PlayerLayout player, Arguments cli, Func<CancellationToken, Task>? prepare, CancellationToken cancellationToken)
+    {
+        var options = new PlayerLaunchOptions(cli.Value("backend") ?? config.RunBackend, cli.Has("fallback-exe") || config.NativeFallbackToExe,
+            cli.Value("native-host") is { } host ? Path.GetFullPath(host) : config.NativeHost);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (prepare is not null) await prepare(cancellationToken);
+            var result = await PlayerSession.RunAsync(config, player, cli.PlayerArguments, cli.Value("log-file"), cancellationToken, options);
+            if (!cli.Has("keep-alive") || result == 130 || cancellationToken.IsCancellationRequested) return result;
+            Console.WriteLine("Unidot session is alive. Enter 'restart' (or r) for a new Player process, 'quit' (or q) to exit. Ctrl+C exits.");
+            while (true)
+            {
+                var command = await Console.In.ReadLineAsync(cancellationToken);
+                if (command is null || command.Trim().Equals("quit", StringComparison.OrdinalIgnoreCase) || command.Trim().Equals("q", StringComparison.OrdinalIgnoreCase)) return result;
+                if (command.Trim().Equals("restart", StringComparison.OrdinalIgnoreCase) || command.Trim().Equals("r", StringComparison.OrdinalIgnoreCase)) break;
+                Console.WriteLine("Use restart/r or quit/q.");
+            }
         }
     }
 
@@ -99,6 +138,7 @@ internal static class Program
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             if (Path.GetDirectoryName(path) != Environment.CurrentDirectory) inferred.SourceDirectory = inferred.SourcePath;
             inferred.Save(path);
+            PlayerAgentInstructions.Ensure(inferred, PlayerLayout.Discover(inferred.Player));
             Console.WriteLine($"Initialized Player source configuration: {path}");
             return 0;
         }
@@ -129,6 +169,7 @@ internal static class Program
         ProjectGenerator.Generate(config, toolchain, graph, resolver);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         config.Save(path);
+        PlayerAgentInstructions.Ensure(config, player);
         Console.WriteLine($"Initialized {path}");
         Console.WriteLine($"Compiler: {toolchain.Compiler}");
         return 0;
@@ -183,9 +224,14 @@ internal static class Program
                 try
                 {
                     config = Configuration.Load(cli.Value("config") ?? Path.Combine(config.Directory, "unidot.json"), cli.Value("src"), cli.Value("unity-editor"));
+                    config.Verbose = cli.Has("verbose");
+                    WorkspaceManager.Validate(config);
+                    if (cli.Has("no-shared")) config.SharedCompilation = false;
+                    if (cli.Has("isolated-ilpp")) config.ReuseIlppHost = false;
                     if (cli.Value("unity-editor") is { } editor) config.UnityEditor = Path.GetFullPath(editor);
                     toolchain = UnityToolchain.Discover(config);
                     player = PlayerLayout.Discover(config.Player);
+                    PlayerAgentInstructions.Ensure(config, player);
                     graph = AssemblyGraph.Scan(config, toolchain);
                     ResetWatchers(graph);
                     var resolver = new ReferenceResolver(config, graph, player);
@@ -206,6 +252,12 @@ internal static class Program
 
         From a Player directory: map your sources to Src, then unidot run.
         unidot link --source <Unity Assets/Artists/Scripts> [--path Src/Artists/Scripts]
+        unidot workspace create <name> --base <Player directory or exe> [--root Workspaces] [--src <source directory>]
+        unidot workspace list [--root Workspaces]
+        unidot workspace diff <name> [--root Workspaces]
+        unidot workspace apply <name> [--dry-run] [--root Workspaces]
+        unidot workspace resolve <name> <Src-relative-file> [--root Workspaces]
+        unidot workspace remove <name> [--root Workspaces]
         unidot init [--src Src] [--unity-editor <installation>]
         unidot init --project <Unity project> --player <Player.exe or directory>
                     [--unity-editor <Unity.exe, Editor directory, or installation>]
@@ -216,18 +268,27 @@ internal static class Program
         unidot graph [assembly ...] [--no-dependencies]
         unidot build [assembly ...] [--no-dependencies] [--no-deploy] [--force] [--keep-going]
         unidot run [--src Src] [--no-build] [--force] [--log-file <path>] [-- <Player arguments ...>]
+                   [--backend exe|native] [--fallback-exe] [--keep-alive]
         unidot watch [assembly ...] [--no-dependencies] [--no-deploy]
         unidot restore [--backup <manifest.json>]
         unidot audit
         unidot ilpp --dll <DLL> [--pdb <PDB>] --processor <compiled Unity ILPP DLL>
 
-        All commands accept --config <unidot.json>. Build commands accept --unity-editor.
+        Player commands accept --config <unidot.json>. workspace create can use --config for its base binding.
+        Workspace management uses --root (default ./Workspaces), without Git or a current Player binding.
+        Workspace creation copies Src/Managed and links resources; file-link privilege is required.
+        Build commands accept --unity-editor.
+        build/run/watch default to concise summaries; --verbose streams detailed compiler, ILPP and Player output.
+        Full compiler/ILPP logs and Player stdout/stderr sidecars are retained under .unidot/logs.
+        build/run/watch reuse Unity's compiler server and one ILPP worker per build by default.
+        Use --no-shared and/or --isolated-ilpp to disable reuse; add --force to bypass cached outputs.
         Toolchain: config/--unity-editor > UNIDOT_UNITY_EDITOR > UNITY_EDITOR > Unity Hub.
         Default targets: configured assemblies, otherwise buildRoots (or local asmdefs present in Player).
         Cached registry/git packages remain binary dependencies unless explicitly targeted.
         Generated Player projects and outputs live in .unidot beside unidot.json.
         run builds, postprocesses and deploys, then follows the Player log until exit. Ctrl+C closes the Player.
-        Generated solutions use the product name and include Launcher as the IDE startup project.
+        <Product Name>.Unidot.sln and .run configurations live at the workspace root; Launcher is the IDE startup project.
+        Workspace commands maintain only Unidot's managed section in Player AGENTS.md; help/version are read-only.
         """);
 }
 
@@ -246,10 +307,10 @@ internal sealed class Arguments
         var result = new Arguments();
         if (args.Length == 0) return result;
         result.Command = args[0];
-        if (result.Command is not ("help" or "--help" or "-h" or "--version" or "version" or "init" or "generate" or "graph" or "build" or "run" or "watch" or "restore" or "audit" or "ilpp" or "link"))
+        if (result.Command is not ("help" or "--help" or "-h" or "--version" or "version" or "init" or "generate" or "graph" or "build" or "run" or "watch" or "restore" or "audit" or "ilpp" or "ilpp-worker" or "link" or "workspace"))
             throw new UnidotException($"Unknown command '{result.Command}'. Run unidot --help.");
-        var flags = new HashSet<string>(["help", "no-dependencies", "no-deploy", "no-build", "force", "development", "keep-going"], StringComparer.Ordinal);
-        var valued = new HashSet<string>(["config", "project", "player", "unity-editor", "assembly", "define", "source-root", "build-root", "reference-mode", "api-profile", "backup", "dll", "pdb", "processor", "rsp", "src", "source", "path", "ilpp-plugin", "log-file", "parent-pid"], StringComparer.Ordinal);
+        var flags = new HashSet<string>(["help", "no-dependencies", "no-deploy", "no-build", "force", "development", "keep-going", "fallback-exe", "keep-alive", "no-shared", "isolated-ilpp", "verbose", "dry-run"], StringComparer.Ordinal);
+        var valued = new HashSet<string>(["config", "project", "player", "unity-editor", "assembly", "define", "source-root", "build-root", "reference-mode", "api-profile", "backup", "dll", "pdb", "processor", "rsp", "src", "source", "path", "ilpp-plugin", "log-file", "parent-pid", "backend", "native-host", "base", "root"], StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i++)
         {
             if (args[i] == "-h") { result.options["help"] = ["true"]; continue; }
@@ -275,12 +336,20 @@ internal sealed class Arguments
         var allowed = new HashSet<string>(["config", "help"], StringComparer.Ordinal);
         if (result.Command is "init" or "generate" or "graph" or "build" or "watch" or "run") allowed.UnionWith(["unity-editor", "src"]);
         if (result.Command == "init") allowed.UnionWith(["project", "player", "assembly", "define", "source-root", "build-root", "reference-mode", "api-profile", "development", "ilpp-plugin"]);
-        if (result.Command is "build" or "watch") allowed.UnionWith(["no-dependencies", "no-deploy", "force", "keep-going"]);
+        if (result.Command is "build" or "watch") allowed.UnionWith(["no-dependencies", "no-deploy", "force", "keep-going", "no-shared", "isolated-ilpp", "verbose"]);
         if (result.Command == "graph") allowed.Add("no-dependencies");
         if (result.Command == "restore") allowed.Add("backup");
         if (result.Command == "ilpp") allowed.UnionWith(["dll", "pdb", "processor", "rsp"]);
-        if (result.Command == "run") allowed.UnionWith(["no-build", "force", "no-dependencies", "log-file", "parent-pid"]);
+        if (result.Command == "ilpp-worker") allowed.Add("processor");
+        if (result.Command == "run") allowed.UnionWith(["no-build", "force", "no-dependencies", "log-file", "parent-pid", "backend", "native-host", "fallback-exe", "keep-alive", "no-shared", "isolated-ilpp", "verbose"]);
         if (result.Command == "link") allowed.UnionWith(["source", "path"]);
+        if (result.Command == "workspace")
+        {
+            allowed.Add("root");
+            if (result.Positionals.FirstOrDefault() == "create") allowed.UnionWith(["base", "src", "unity-editor"]);
+            else allowed.Remove("config");
+            if (result.Positionals.FirstOrDefault() == "apply") allowed.Add("dry-run");
+        }
         foreach (var option in result.options.Keys)
             if (!allowed.Contains(option)) throw new UnidotException($"--{option} is not supported by {result.Command}.");
         return result;

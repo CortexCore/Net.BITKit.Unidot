@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unidot", "src\Unidot\Unidot
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unidot.Tests", "tests\Unidot.Tests\Unidot.Tests.csproj", "{41C5A95D-87E8-474F-A172-748CB2C22E25}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Unidot.NativeHost", "src\Unidot.NativeHost\Unidot.NativeHost.csproj", "{9DF899E7-A77C-4A78-B467-CB1095443D24}"
+EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
         Debug|Any CPU = Debug|Any CPU
@@ -20,5 +22,9 @@ Global
         {41C5A95D-87E8-474F-A172-748CB2C22E25}.Debug|Any CPU.Build.0 = Debug|Any CPU
         {41C5A95D-87E8-474F-A172-748CB2C22E25}.Release|Any CPU.ActiveCfg = Release|Any CPU
         {41C5A95D-87E8-474F-A172-748CB2C22E25}.Release|Any CPU.Build.0 = Release|Any CPU
+        {9DF899E7-A77C-4A78-B467-CB1095443D24}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {9DF899E7-A77C-4A78-B467-CB1095443D24}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {9DF899E7-A77C-4A78-B467-CB1095443D24}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {9DF899E7-A77C-4A78-B467-CB1095443D24}.Release|Any CPU.Build.0 = Release|Any CPU
     EndGlobalSection
 EndGlobal

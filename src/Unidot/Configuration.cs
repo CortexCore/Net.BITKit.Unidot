@@ -13,6 +13,14 @@ internal sealed class Configuration
     public string UnityEditor { get; set; } = "";
     public string? SourceDirectory { get; set; }
     public string? ProductName { get; set; }
+    public string RunBackend { get; set; } = "exe";
+    public string? NativeHost { get; set; }
+    public bool NativeFallbackToExe { get; set; }
+    public bool SharedCompilation { get; set; } = true;
+    public bool ReuseIlppHost { get; set; } = true;
+    public string[] WorkspaceExcludedSources { get; set; } = [];
+    public string? WorkspaceManifest { get; set; }
+    public string? GlobalCompilerResponse { get; set; }
     public string Platform { get; set; } = "WindowsStandalone64";
     public string ApiProfile { get; set; } = "unity-4.8";
     public string LanguageVersion { get; set; } = "9.0";
@@ -27,6 +35,7 @@ internal sealed class Configuration
     public string[] UnityIlppPlugins { get; set; } = [];
     public Dictionary<string, PostProcessor[]> PostProcessors { get; set; } = new(StringComparer.Ordinal);
     [JsonIgnore] public string Directory { get; private set; } = "";
+    [JsonIgnore] public bool Verbose { get; set; }
     [JsonIgnore] public string? FilePath { get; private set; }
     [JsonIgnore] public string GeneratedDirectory => Path.Combine(Directory, ".unidot");
     [JsonIgnore] public string? SourcePath => SourceDirectory is null ? null : Path.GetFullPath(SourceDirectory, Directory);
@@ -49,6 +58,7 @@ internal sealed class Configuration
             if (!automatic) throw new UnidotException($"Configuration not found: {path}. Run unidot init first.");
             var created = PlayerSources.Configure(Environment.CurrentDirectory, sourceDirectory ?? "Src", unityEditor);
             created.Save(path);
+            PlayerAgentInstructions.Ensure(created, PlayerLayout.Discover(created.Player));
             Console.WriteLine($"Bound Player sources: {created.SourcePath}. Configuration: {path}");
             return created;
         }
@@ -70,12 +80,17 @@ internal sealed class Configuration
         Player = Absolute(Player);
         if (!string.IsNullOrWhiteSpace(UnityEditor)) UnityEditor = Absolute(UnityEditor);
         SourceRoots = SourceRoots.Select(Absolute).ToArray();
+        WorkspaceExcludedSources = WorkspaceExcludedSources.Select(Absolute).ToArray();
+        if (WorkspaceManifest is not null) WorkspaceManifest = Absolute(WorkspaceManifest);
+        if (GlobalCompilerResponse is not null) GlobalCompilerResponse = Absolute(GlobalCompilerResponse);
         BuildRoots = BuildRoots.Select(p => Path.GetFullPath(p, UnityProject)).ToArray();
         if (ReferenceMode is not ("asmdef" or "player")) throw new UnidotException("referenceMode must be asmdef or player.");
         foreach (var root in BuildRoots)
             if (!System.IO.Directory.Exists(root)) throw new UnidotException($"Build root not found: {root}");
         Analyzers = Analyzers.Select(Absolute).ToArray();
         UnityIlppPlugins = UnityIlppPlugins.Select(p => Path.GetFullPath(p, UnityProject)).ToArray();
+        if (RunBackend is not ("exe" or "native")) throw new UnidotException("runBackend must be exe or native.");
+        if (NativeHost is not null) NativeHost = Absolute(NativeHost);
         if (Platform != "WindowsStandalone64")
             throw new UnidotException("v1 currently supports WindowsStandalone64 Mono Players only.");
         if (ApiProfile is not ("unity-4.8" or "netstandard2.1"))
@@ -111,7 +126,11 @@ internal sealed class PostProcessor
 
 internal sealed record PlayerLayout(string Executable, string DataDirectory, string ManagedDirectory)
 {
-    public static PlayerLayout Discover(string path)
+    public string RootDirectory => Path.GetDirectoryName(DataDirectory)!;
+    public string UnityPlayerLibrary => Path.Combine(RootDirectory, "UnityPlayer.dll");
+    public bool HasExecutable => File.Exists(Executable);
+
+    public static PlayerLayout Discover(string path, bool requireExecutable = true, bool allowIl2cpp = false)
     {
         string executable;
         if (System.IO.Directory.Exists(path))
@@ -119,18 +138,26 @@ internal sealed record PlayerLayout(string Executable, string DataDirectory, str
             var candidates = System.IO.Directory.EnumerateFiles(path, "*.exe")
                 .Where(p => System.IO.Directory.Exists(Path.Combine(path, Path.GetFileNameWithoutExtension(p) + "_Data")))
                 .ToArray();
-            if (candidates.Length != 1)
-                throw new UnidotException($"Expected one Unity Player in {path}; specify the .exe explicitly.");
-            executable = candidates[0];
+            if (candidates.Length == 1) executable = candidates[0];
+            else if (!requireExecutable)
+            {
+                var dataCandidates = System.IO.Directory.EnumerateDirectories(path, "*_Data")
+                    .Where(p => File.Exists(Path.Combine(p, "globalgamemanagers"))).ToArray();
+                if (dataCandidates.Length != 1) throw new UnidotException($"Expected one Unity data directory in {path}; specify its original Player .exe path to disambiguate.");
+                executable = Path.Combine(path, Path.GetFileName(dataCandidates[0])[..^5] + ".exe");
+            }
+            else throw new UnidotException($"Expected one Unity Player in {path}; specify the .exe explicitly.");
         }
         else executable = path;
-        if (!File.Exists(executable)) throw new UnidotException($"Player executable not found: {executable}");
+        if (requireExecutable && !File.Exists(executable)) throw new UnidotException($"Player executable not found: {executable}");
         var root = Path.GetDirectoryName(executable)!;
         var data = Path.Combine(root, Path.GetFileNameWithoutExtension(executable) + "_Data");
         var managed = Path.Combine(data, "Managed");
-        if (!System.IO.Directory.Exists(managed) || !File.Exists(Path.Combine(managed, "mscorlib.dll")) ||
+        if (!System.IO.Directory.Exists(data)) throw new UnidotException($"Unity data directory not found: {data}");
+        var il2cpp = File.Exists(Path.Combine(root, "GameAssembly.dll"));
+        if (!(allowIl2cpp && il2cpp) && (!System.IO.Directory.Exists(managed) || !File.Exists(Path.Combine(managed, "mscorlib.dll")) ||
             !System.IO.Directory.Exists(Path.Combine(root, "MonoBleedingEdge")) || File.Exists(Path.Combine(root, "GameAssembly.dll")))
-            throw new UnidotException("The Player must use Mono and contain an intact Managed directory; IL2CPP is not supported.");
+            ) throw new UnidotException("Code compilation/deployment requires Mono with an intact Managed directory. IL2CPP can only use a no-build runtime backend.");
         return new(Path.GetFullPath(executable), data, managed);
     }
 }

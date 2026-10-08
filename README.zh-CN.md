@@ -21,13 +21,13 @@ unidot run
 
 ### 1. 安装
 
-从 [v0.3.0 Alpha Release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.3.0) 下载 `Net.BITKit.Unidot.0.3.0.nupkg`，放入本地 `packages` 目录，然后执行：
+从 [v0.6.0 Alpha Release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.6.0) 下载 `Net.BITKit.Unidot.0.6.0.nupkg`，放入本地 `packages` 目录，然后执行：
 
 ```powershell
-dotnet tool install --global Net.BITKit.Unidot --version 0.3.0 --add-source ./packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source ./packages
 ```
 
-也可以下载同一 Release 中的 `Unidot-v0.3.0-windows.zip`，解压后将其目录加入 `PATH`。ZIP 需要 .NET 8 Runtime；安装 .NET Tool 需要 SDK。当前安装包通过 GitHub Releases 提供，尚未发布到 nuget.org。
+也可以下载同一 Release 中的 `Unidot-v0.6.0-windows.zip`，解压后将其目录加入 `PATH`。ZIP 需要 .NET 8 Runtime；安装 .NET Tool 需要 SDK。当前安装包通过 GitHub Releases 提供，尚未发布到 nuget.org。已有安装可使用同样版本/包源执行 `dotnet tool update --global`；替换已安装工具前先结束其运行会话。
 
 ### 2. 链接源码
 
@@ -62,6 +62,8 @@ unidot run
 
 **Ctrl+C 会关闭本次启动的游戏。** 游戏主动退出后，Unidot 收尾日志并返回退出码。完整日志同时保存在 `.unidot/logs/`。
 
+默认输出显示简洁的构建/运行结果和关键错误；`unidot run --verbose` 显示完整实时诊断，`build`、`watch` 同样支持。两种模式都保存完整编译/ILPP 日志和 Player stdout/stderr 日志。
+
 ## 常用命令
 
 | 命令 | 用途 |
@@ -77,13 +79,32 @@ unidot run
 
 游戏参数放在 `--` 后，例如 `unidot run -- --mode=no-init`。全部选项见 `unidot --help`。
 
+源码构建默认复用 Unity Roslyn 编译服务器和 ILPP worker，控制台及 `.unidot/build-report.json` 显示逐程序集耗时。排查时可用 `--no-shared` / `--isolated-ilpp` 切回独立进程，详见[构建性能](docs/guide.zh-CN.md#构建性能)。
+
+## 轻量 agent workspace
+
+```powershell
+unidot workspace create agent-a --base ./Build
+unidot workspace list
+unidot workspace diff agent-a
+unidot workspace apply agent-a --dry-run
+unidot workspace apply agent-a
+unidot workspace remove agent-a
+```
+
+直接创建 `./Workspaces/agent-a`：**Src 与 Managed 独立复制，大资源直接链接**，不依赖 Git，也不先复制整包。在新目录继续使用 `unidot build`、`generate`、`run`。创建结果显示复制/共享大小；管理命令可用 `--root <目录>` 指定其他容器。Windows 需要文件符号链接权限，无法链接时不会静默复制资源。详见[workspace 使用说明](docs/guide.zh-CN.md#轻量-agent-workspace)。
+
+`apply` 在整批无冲突时把源码改动回传原位置。冲突时先在 workspace 内编辑最终结果，执行 `unidot workspace resolve agent-a Artists/Scripts/Foo.cs`，再重试 apply。确认绑定具体哈希，任一文件变化就失效。详见[源码回传与冲突解决](docs/guide.zh-CN.md#源码回传与冲突解决)。
+
 ## IDE 点播放
 
 ```powershell
 unidot generate
 ```
 
-打开 `.unidot/<产品名>.sln`，选择 **Launcher**，在 Rider 或 Visual Studio 点播放。Launcher 调用 `unidot run`，IDE 控制台显示编译输出和 Unity 日志；停止 Launcher 会结束它的 Player 会话。
+打开 Player 工作目录顶层的 `<产品名>.Unidot.sln`，选择 **Launcher**，在 Rider 或 Visual Studio 点播放。`.Unidot` 后缀避开 Unity 的原生 Visual Studio 构建标记。Launcher 调用 `unidot run`，IDE 控制台显示编译输出和 Unity 日志；停止 Launcher 会结束它的 Player 会话。VS Code 也可以直接打开同一目录，一边编辑 `Src`，一边使用终端。
+
+Unidot 会维护 Player 目录 `AGENTS.md` 中自己的区块，说明源码链接、构建运行命令和测试应放的位置，保留用户原有指令。`--help`、`--version` 不创建文件。
 
 ## 使用条件
 

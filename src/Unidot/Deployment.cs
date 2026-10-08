@@ -133,6 +133,12 @@ internal static class PlayerRuntime
 {
     public static bool IsRunning(string executable)
     {
+        var sessionLock = Path.Combine(Path.GetDirectoryName(executable)!, ".unidot", "player-session.lock");
+        if (File.Exists(sessionLock))
+        {
+            try { using var probe = new FileStream(sessionLock, FileMode.Open, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) { return true; }
+        }
         foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
         {
             using (process)

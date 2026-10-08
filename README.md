@@ -21,13 +21,13 @@ unidot run
 
 ### 1. Install
 
-Download `Net.BITKit.Unidot.0.3.0.nupkg` from the [v0.3.0 Alpha release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.3.0) into a local `packages` directory, then install:
+Download `Net.BITKit.Unidot.0.6.0.nupkg` from the [v0.6.0 Alpha release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.6.0) into a local `packages` directory, then install:
 
 ```powershell
-dotnet tool install --global Net.BITKit.Unidot --version 0.3.0 --add-source ./packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source ./packages
 ```
 
-Or extract `Unidot-v0.3.0-windows.zip` from the same release and add its directory to `PATH`. The ZIP requires .NET 8 Runtime; .NET Tool installation requires the SDK. Packages are distributed through GitHub Releases, not currently through nuget.org.
+Or extract `Unidot-v0.6.0-windows.zip` from the same release and add its directory to `PATH`. The ZIP requires .NET 8 Runtime; .NET Tool installation requires the SDK. Packages are distributed through GitHub Releases, not currently through nuget.org. Existing installations can use `dotnet tool update --global` with the same version/source; close active Unidot sessions before replacing the installed tool.
 
 ### 2. Link your source
 
@@ -62,6 +62,8 @@ Source → Unity Roslyn → ILPP → Backup & deploy → Unity Player
 
 **Ctrl+C closes this Player.** When the game exits, Unidot finishes the log and returns its exit code. Logs are also saved under `.unidot/logs/`.
 
+Default output shows concise build/session results and key errors. Use `unidot run --verbose` (also supported by `build` and `watch`) for full live diagnostics. Complete compiler/ILPP logs and Player stdout/stderr sidecars are saved in either mode.
+
 ## Everyday commands
 
 | Command | What it does |
@@ -77,13 +79,32 @@ Source → Unity Roslyn → ILPP → Backup & deploy → Unity Player
 
 Player arguments go after `--`, for example `unidot run -- --mode=no-init`. See `unidot --help` for all options.
 
+Source builds reuse Unity's Roslyn compiler server and an ILPP worker by default. Per-assembly timings appear in the console and `.unidot/build-report.json`; use `--no-shared` / `--isolated-ilpp` for isolated-process diagnostics. See [build performance](docs/guide.md#build-performance).
+
+## Lightweight agent workspaces
+
+```powershell
+unidot workspace create agent-a --base ./Build
+unidot workspace list
+unidot workspace diff agent-a
+unidot workspace apply agent-a --dry-run
+unidot workspace apply agent-a
+unidot workspace remove agent-a
+```
+
+Creation makes `./Workspaces/agent-a` directly: **Src and Managed are private copies; large resources are links**, without Git or an intermediate full Build copy. From the new directory, use normal `unidot build`, `generate`, and `run`. Creation reports copied/shared bytes; use `--root <directory>` on management commands to choose another container. Windows file symbolic-link privilege is required; unavailable links never silently fall back to resource copying. See [workspace details](docs/guide.md#lightweight-agent-workspaces).
+
+`apply` returns source changes to their original locations only when the full batch is conflict-free. On conflict, edit the result inside the workspace, run `unidot workspace resolve agent-a Artists/Scripts/Foo.cs`, then retry apply. Exact hash confirmations expire if either file changes. See [source return and resolution](docs/guide.md#source-return-and-conflict-resolution).
+
 ## IDE playback
 
 ```powershell
 unidot generate
 ```
 
-Open `.unidot/<Product Name>.sln`, select **Launcher**, and press Play in Rider or Visual Studio. Launcher calls `unidot run`; the IDE console receives build output and Unity logs. Stopping Launcher ends its Player session.
+Open `<Product Name>.Unidot.sln` at the Player workspace root, select **Launcher**, and press Play in Rider or Visual Studio. The `.Unidot` suffix avoids Unity's native Visual Studio build marker. Launcher calls `unidot run`; the IDE console receives build output and Unity logs. Stopping Launcher ends its Player session. VS Code can open the same root to show `Src`, the solution, and a terminal in one workspace.
+
+Unidot also maintains an `AGENTS.md` section in the Player directory to explain linked source, build/run commands, and where tests belong. Existing user instructions remain intact. `--help` and `--version` do not create files.
 
 ## Requirements
 

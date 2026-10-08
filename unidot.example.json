@@ -14,6 +14,8 @@
   "buildRoots": ["Assets/Artists/Scripts"],
   "referenceMode": "player",
   "compilerArguments": [],
+  "sharedCompilation": true,
+  "reuseIlppHost": true,
   "analyzers": [],
   "unityIlppPlugins": [],
   "postProcessors": {}

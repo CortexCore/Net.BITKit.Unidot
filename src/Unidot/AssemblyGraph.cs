@@ -55,11 +55,13 @@ internal sealed class AssemblyGraph
     private readonly HashSet<string> visited = new(PathComparer.Instance);
     private readonly List<DirectoryNode> directories = [];
     private readonly Dictionary<string, AssemblyNode> byDirectory = new(PathComparer.Instance);
+    private string[] excludedSources = [];
+    private bool privateSources;
     private sealed record DirectoryNode(string Path, DirectoryNode? Parent, bool Assets, bool Cached, bool PlayerSource, string[] Files);
 
     public static AssemblyGraph Scan(Configuration config, UnityToolchain toolchain)
     {
-        var graph = new AssemblyGraph();
+        var graph = new AssemblyGraph { excludedSources = config.WorkspaceExcludedSources, privateSources = config.WorkspaceManifest is not null };
         graph.PackageVersions["Unity"] = toolchain.Version;
         if (config.SourcePath is not null) graph.AddRoot(config.SourcePath, true, false, true);
         var assets = Path.Combine(config.UnityProject, "Assets");
@@ -175,6 +177,8 @@ internal sealed class AssemblyGraph
         graph.GlobalDefines = UnityDefines.Read(config, toolchain.Version);
         foreach (var node in graph.All.Values)
         {
+            if (config.WorkspaceManifest is not null && node.PlayerSource && node.Sources.Any(p => !WorkspaceManager.Within(p, config.SourcePath!)))
+                throw new UnidotException($"{node.Name} owns sources outside workspace Src. Expand the base Src mapping before creating a workspace.");
             var symbols = graph.GlobalDefines.ToHashSet(StringComparer.Ordinal);
             foreach (var rule in node.Definition.VersionDefines)
                 if (!string.IsNullOrWhiteSpace(rule.Define) && graph.PackageVersions.TryGetValue(rule.Name, out var version) && VersionRules.Matches(version, rule.Expression))
@@ -234,6 +238,7 @@ internal sealed class AssemblyGraph
 
     private void AddRoot(string path, bool assets, bool cached, bool playerSource = false)
     {
+        if (excludedSources.Any(root => WorkspaceManager.Within(PathComparer.PhysicalDirectory(path), root))) return;
         if (!Directory.Exists(path)) throw new UnidotException($"Source root not found: {path}");
         Roots.Add(PathComparer.PhysicalDirectory(path));
         Walk(path, null, assets, cached, playerSource);
@@ -241,9 +246,14 @@ internal sealed class AssemblyGraph
 
     private void Walk(string path, DirectoryNode? parent, bool assets, bool cached, bool playerSource)
     {
+        if (privateSources && playerSource && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new UnidotException($"Workspace Src must contain real directories, not links: {path}");
         path = PathComparer.PhysicalDirectory(path);
+        if (excludedSources.Any(root => WorkspaceManager.Within(path, root))) return;
         if (!visited.Add(path)) return;
         var files = Directory.GetFiles(path);
+        if (privateSources && playerSource && files.Any(p => (File.GetAttributes(p) & FileAttributes.ReparsePoint) != 0))
+            throw new UnidotException($"Workspace Src must contain real files, not links: {path}");
         var node = new DirectoryNode(path, parent, assets, cached, playerSource, files);
         directories.Add(node);
         var packageJson = Path.Combine(path, "package.json");

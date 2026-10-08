@@ -6,3 +6,5 @@ unidot.json
 .vs/
 .idea/
 artifacts/
+Workspaces/
+.unidot-workspace-*.lock

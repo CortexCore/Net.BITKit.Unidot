@@ -37,6 +37,8 @@ jobs:
           & ./artifacts/tool-smoke/unidot.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./artifacts/tool-smoke/unidot.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Unidot.Tests -c Release --no-build -- --installed-cli-smoke "$((Resolve-Path './artifacts/tool-smoke/unidot.exe').Path)"
           exit $LASTEXITCODE
 
       - name: Upload build artifacts

@@ -8,7 +8,7 @@ namespace Unidot;
 
 internal static class PlayerSession
 {
-    public static Task<int> RunAsync(Configuration config, PlayerLayout player, IEnumerable<string> arguments, string? requestedLog, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(Configuration config, PlayerLayout player, IEnumerable<string> arguments, string? requestedLog, CancellationToken cancellationToken, PlayerLaunchOptions? options = null)
     {
         if (PlayerRuntime.IsRunning(player.Executable)) throw new UnidotException("Player is already running.");
         var forwarded = arguments.ToArray();
@@ -16,13 +16,54 @@ internal static class PlayerSession
             throw new UnidotException("Use --log-file <path> so Unidot can follow the Unity log.");
         var log = requestedLog is null ? Path.Combine(config.GeneratedDirectory, "logs", "Player-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + ".log") :
             Path.GetFullPath(requestedLog, Environment.CurrentDirectory);
-        var start = new ProcessStartInfo(player.Executable) { WorkingDirectory = Path.GetDirectoryName(player.Executable)!, UseShellExecute = false };
-        start.ArgumentList.Add("-logFile"); start.ArgumentList.Add(log);
-        foreach (var argument in forwarded) start.ArgumentList.Add(argument);
-        return RunProcessAsync(start, log, cancellationToken);
+        Directory.CreateDirectory(Path.Combine(player.RootDirectory, ".unidot"));
+        FileStream sessionLock;
+        try { sessionLock = new FileStream(Path.Combine(player.RootDirectory, ".unidot", "player-session.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        catch (IOException) { throw new UnidotException("Another Unidot Player session is already running in this directory."); }
+        using (sessionLock)
+        {
+            options ??= new(config.RunBackend, config.NativeFallbackToExe, config.NativeHost);
+            ProcessStartInfo Standard(string? targetLog = null) => StandardStart(player, forwarded, targetLog ?? log);
+            if (options.Backend == "exe") return await RunProcessAsync(Standard(), log, cancellationToken, verbose: config.Verbose);
+            if (options.Backend != "native") throw new UnidotException("Run backend must be exe or native.");
+            var diagnostics = log + ".native.json";
+            ProcessStartInfo native;
+            try { native = await NativePlayerBackend.CreateAsync(config, player, log, diagnostics, forwarded, options.NativeHost, cancellationToken); }
+            catch (UnidotException error) when (options.FallbackToExe && player.HasExecutable)
+            {
+                Console.Error.WriteLine("Native preflight failed: " + error.Message + " Falling back to standard EXE.");
+                return await RunProcessAsync(Standard(), log, cancellationToken, verbose: config.Verbose);
+            }
+            int result;
+            try { result = await RunProcessAsync(native, log, cancellationToken, verbose: config.Verbose); }
+            catch (Win32Exception error) when (options.FallbackToExe && player.HasExecutable)
+            {
+                Console.Error.WriteLine("Native Host process could not start: " + error.Message + " Falling back to standard EXE.");
+                return await RunProcessAsync(Standard(log + ".fallback.log"), log + ".fallback.log", cancellationToken, verbose: config.Verbose);
+            }
+            if (NativePlayerBackend.CanFallback(diagnostics, result))
+            {
+                Console.Error.WriteLine("Native startup failed: " + NativePlayerBackend.Describe(diagnostics));
+                if (options.FallbackToExe && player.HasExecutable)
+                {
+                    Console.WriteLine("Falling back to standard EXE.");
+                    return await RunProcessAsync(Standard(log + ".fallback.log"), log + ".fallback.log", cancellationToken, verbose: config.Verbose);
+                }
+            }
+            return result;
+        }
     }
 
-    internal static async Task<int> RunProcessAsync(ProcessStartInfo start, string logPath, CancellationToken cancellationToken, TextWriter? destination = null)
+    internal static ProcessStartInfo StandardStart(PlayerLayout player, IEnumerable<string> arguments, string log)
+    {
+        if (!player.HasExecutable) throw new UnidotException("Standard EXE fallback is unavailable: " + player.Executable);
+        var start = new ProcessStartInfo(player.Executable) { WorkingDirectory = player.RootDirectory, UseShellExecute = false };
+        start.ArgumentList.Add("-logFile"); start.ArgumentList.Add(log);
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        return start;
+    }
+
+    internal static async Task<int> RunProcessAsync(ProcessStartInfo start, string logPath, CancellationToken cancellationToken, TextWriter? destination = null, bool verbose = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         logPath = Path.GetFullPath(logPath);
@@ -30,9 +71,17 @@ internal static class PlayerSession
         // Unity also truncates its log on launch. Start empty to avoid streaming an older session.
         using (new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { }
         var output = TextWriter.Synchronized(destination ?? Console.Out);
+        var errors = destination is null ? TextWriter.Synchronized(Console.Error) : output;
+        using var unity = new RuntimeLogWriter(output, verbose, channel: "unity", errorOutput: errors);
+        using var stdout = new RuntimeLogWriter(output, verbose, channel: "player stdout", errorOutput: errors);
+        using var stderr = new RuntimeLogWriter(errors, verbose, stderr: true, channel: "player stderr");
+        await using var stdoutLog = new StreamWriter(new FileStream(logPath + ".stdout.log", FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete), new UTF8Encoding(false)) { AutoFlush = true };
+        await using var stderrLog = new StreamWriter(new FileStream(logPath + ".stderr.log", FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete), new UTF8Encoding(false)) { AutoFlush = true };
         start.UseShellExecute = false;
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
+        start.StandardOutputEncoding = Encoding.UTF8;
+        start.StandardErrorEncoding = Encoding.UTF8;
         using var job = OperatingSystem.IsWindows() ? new OwnedProcessJob() : null;
         using var process = Process.Start(start) ?? throw new UnidotException($"Could not start {start.FileName}.");
         using var drain = new CancellationTokenSource();
@@ -43,16 +92,24 @@ internal static class PlayerSession
         {
             job?.Assign(process);
             await output.WriteLineAsync($"Started Player (PID {process.Id}). Log: {logPath}");
-            await output.WriteLineAsync("Following Unity log. Ctrl+C closes this Player and ends the session.");
-            follow = FollowLogAsync(logPath, output, drain.Token);
-            async Task PumpAsync(StreamReader reader)
+            await output.WriteLineAsync($"Native logs: {logPath}.stdout.log / {logPath}.stderr.log");
+            await output.WriteLineAsync(verbose ? "Following full Player logs. Ctrl+C closes this Player." : "Showing Player errors and session status. Use --verbose for full logs. Ctrl+C closes this Player.");
+            follow = FollowLogAsync(logPath, unity, drain.Token);
+            async Task PumpAsync(StreamReader reader, StreamWriter log, RuntimeLogWriter console)
             {
-                var chars = new char[4096];
-                int read;
-                while ((read = await reader.ReadAsync(chars.AsMemory(), drain.Token)) > 0)
-                    await output.WriteAsync(chars.AsMemory(0, read), drain.Token);
+                try
+                {
+                    var chars = new char[4096];
+                    int read;
+                    while ((read = await reader.ReadAsync(chars.AsMemory(), drain.Token)) > 0)
+                    {
+                        await log.WriteAsync(chars.AsMemory(0, read), CancellationToken.None);
+                        await console.WriteAsync(chars.AsMemory(0, read), CancellationToken.None);
+                    }
+                }
+                finally { await console.CompleteAsync(); await log.FlushAsync(); }
             }
-            streams = Task.WhenAll(PumpAsync(process.StandardOutput), PumpAsync(process.StandardError));
+            streams = Task.WhenAll(PumpAsync(process.StandardOutput, stdoutLog, stdout), PumpAsync(process.StandardError, stderrLog, stderr));
             try { await process.WaitForExitAsync(cancellationToken); }
             catch (OperationCanceledException)
             {
@@ -69,8 +126,9 @@ internal static class PlayerSession
             drain.Cancel();
             try { await follow; } catch (OperationCanceledException) { }
             try { await streams; } catch (OperationCanceledException) { }
+            await unity.CompleteAsync();
         }
-        await output.WriteLineAsync($"Player exited (PID {process.Id}, code {process.ExitCode}).");
+        await (process.ExitCode == 0 || cancelled ? output : errors).WriteLineAsync($"Player {(cancelled ? "stopped" : "exited")} (PID {process.Id}, code {process.ExitCode}). Log: {logPath}");
         return cancelled ? 130 : process.ExitCode;
     }
 

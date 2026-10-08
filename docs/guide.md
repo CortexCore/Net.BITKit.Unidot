@@ -25,6 +25,90 @@ unidot init --project "D:\Games\MyGame.Unity" --player "D:\Games\MyGame.Build\My
 
 All commands accept `--config <file>`. Without it, configuration is located by walking up from the current directory. See [unidot.example.json](../unidot.example.json).
 
+## Lightweight agent workspaces
+
+From the directory containing your base Build:
+
+```powershell
+unidot workspace create agent-a --base ./Build
+unidot workspace list
+unidot workspace diff agent-a
+unidot workspace remove agent-a
+```
+
+The default container is `./Workspaces` relative to the command's current directory. Use `--root <directory>` consistently to select another container. The destination must be outside the base Player and all copied source trees. The base Player may remain running: creation only reads/copies it. The base Unidot build/deployment lock must be available; actual unreadable or changing Managed inputs cause an actionable failure and cleanup, rather than closing the Player.
+
+Creation reads the base Player's `unidot.json`, or infers a binding from its Src link if no configuration exists; it does not save a new base configuration. Use `--config <file>` for a binding stored elsewhere, `--src <directory>` to select source explicitly, and `--unity-editor <installation>` to override the compiler installation. It creates the new directory directly, with no full-resource copy or intermediate Player clone:
+
+```text
+Workspaces/agent-a/
+  Src/                           real source snapshot
+  Game.exe                       private executable copy
+  UnityPlayer.dll                file link to base runtime
+  MonoBleedingEdge/               directory link to base runtime
+  Game_Data/                     real container directory
+    Managed/                     complete private DLL/PDB/file copies
+    app.info                     private small metadata copy
+    ScriptingAssemblies.json     private registration copy, when present
+    StreamingAssets/             directory link to base resources
+    sharedassets*.assets/.resS    file links to base resources
+  unidot.json
+  AGENTS.md
+  .unidot/workspace.json          manifest and initial source hashes
+```
+
+Src links are followed into actual files when taking the snapshot; source assembly definitions, references and `.meta` files are preserved. Source `.git`, `.unidot`, `bin` and `obj` directories are omitted. Sources/Managed use copies rather than hard links. Existing generated projects, caches, logs and agent instructions are not inherited from the base; the new workspace owns its own generated files, backups, locks and instructions.
+
+Original source subtrees are excluded from assembly discovery to avoid duplicate definitions and accidentally compiling the original code. Package/toolchain metadata continues to come from the original Unity project. Build roots are rebased onto the snapshot; the global `Assets/csc.rsp` is copied separately. A copied assembly that still owns external source through an asmref is refused: expand the base Src mapping to include that source first. Do not replace snapshot source files/directories with links to the original.
+
+From inside the created directory, normal commands work:
+
+```powershell
+unidot generate
+unidot build --no-deploy
+unidot build
+unidot run
+```
+
+Only this workspace's Managed is deployed. `run` remains a persistent foreground session. Shared save locations, network ports and other game-specific external state are not isolated by directory creation.
+
+File/directory linking is probed before copying Src or Managed. On Windows, directories can fall back to junctions, but individual resource files require symbolic-link privilege (Developer Mode or an appropriately privileged account). A failed resource link never falls back to copying large data; partial creation/cancellation is cleaned up by unlinking entries, not traversing resource targets. Creation refuses existing destinations and overlapping paths.
+
+Resources and runtime files are shared, not permission-read-only. Keep the base Build and external link targets available. Before Player commands, Unidot validates link destinations and base file/directory size/timestamp metadata; detected resource changes require recreating the workspace. This is a compatibility check, not a filesystem sandbox or content-hash verification of every large resource.
+
+Creation reports copied and shared payload bytes. `list` also reports current private file bytes, including build caches/logs/backups, without following links. These are logical file sizes, not filesystem allocated/compressed sizes. `diff` lists added/modified/deleted Src paths against initial SHA-256 hashes: it stores no second full source copy, applies no changes, and is not a line-by-line patch. `remove` discards the named workspace after verifying manifest ownership and checking active build/session locks; even broken resource links are removed without deleting their targets.
+
+### Source return and conflict resolution
+
+Run from the directory containing `Workspaces`, or specify its container with `--root`:
+
+```powershell
+unidot workspace apply agent-a --dry-run
+unidot workspace apply agent-a
+# If a file conflicts: edit the final result in Workspaces/agent-a/Src first.
+unidot workspace resolve agent-a Artists/Scripts/Foo.cs
+unidot workspace apply agent-a
+```
+
+For each candidate, apply compares baseline **B** (initial snapshot or last successful apply), workspace **W**, and main/original source **M**:
+
+| Condition | Action |
+|---|---|
+| W equals B | Preserve main; the agent has no pending change |
+| W equals M | Already matched; advance the merge baseline without rewriting source |
+| Only W changed, M still equals B | Apply the add/modify/delete |
+| Both changed to different contents | Conflict; apply nothing in the batch |
+
+Absence is a state too: differing additions, modified-versus-deleted files and deletion of a modified main file require resolution. `resolve` records the exact physical target, B/M/W hashes and confirmation time. It does **not** write main. Either M or W changing makes that confirmation stale; resolve again after preparing the new result. Choosing main means copying its current contents into the workspace, so they match; an explicit resolved deletion means the workspace file remains absent. Recognized conflict markers must be removed before confirmation.
+
+Conflicts return a nonzero exit code and print a bounded main/workspace diff with line context, computed by **DiffPlex**. Full diagnostics are `.unidot/merge-conflicts.diff` and `.unidot/merge-report.json`. Text decoding supports UTF-8 and BOM-marked UTF-16/32; binary/unsupported files and text over 1 MiB are summarized by hashes. These views are diagnostic, not patches or automatic three-way text merges. Initial file contents are not duplicated just to produce the diff.
+
+**Resolved** means an agent prepared and confirmed a result. **Applied** means source writes and hash verification succeeded and the separate `.unidot/workspace-apply.json` baseline advanced. Original `.unidot/workspace.json` creation hashes remain intact, so `workspace diff` still shows changes relative to creation, while subsequent apply compares against the last successful merge. Apply itself does not establish that code builds or behaves correctly; use normal source validation afterward.
+
+Apply visits Src changes and metadata only. `.git`, `.unidot`, `bin`, `obj`, and DLL/PDB/EXE/NuGet build binaries are excluded; Managed/resource/log files are never returned. File bytes, BOM and line endings are copied without text rewriting. New manifests freeze physical source roots so retargeting the old Player-side Src link cannot redirect return; legacy 0.5 workspaces resolve through their recorded original Src/exclusion mapping and refuse targets outside those roots.
+
+`--dry-run` may update the local diagnostic report but never source or merge state. Actual apply locks workspace management/build activity and serializes overlapping Unidot source updates, preflights all candidates, keeps backups/journals under `.unidot/apply-backups/`, stages results, and rechecks files before and after writes. Failed/cancelled writes roll back; if an external editor changes an already-written file before rollback, its edit is preserved and the command reports manual recovery with the backup path. These checks do not lock out arbitrary external editors or provide crash-atomic multi-file filesystem transactions. There is no force-overwrite option.
+
 ## Toolchain
 
 Set `UNIDOT_UNITY_EDITOR`, or its compatible alias `UNITY_EDITOR`, to a Unity executable, Editor directory, Editor/Data directory, or version installation:
@@ -102,10 +186,11 @@ unidot audit
 
 ```text
 unidot.json
+AGENTS.md
+<Product Name>.Unidot.sln
+.run/Launcher.run.xml
 .unidot/
-  <Product Name>.sln
   Launcher/Launcher.csproj
-  .run/Launcher.run.xml
   projects/<assembly>/<assembly>.csproj
   bin/<assembly>/<assembly>.dll + .pdb
   graph.json
@@ -116,7 +201,19 @@ unidot.json
   logs/
 ```
 
-The product name comes from `Player_Data/app.info`, falls back to the executable's name, and can be overridden with `productName` in configuration.
+The product name comes from `Player_Data/app.info`, falls back to the executable's name, and can be overridden with `productName` in configuration. The solution and shared `.run` profile live beside `unidot.json`; generated projects, binaries, caches, logs, and backups remain in `.unidot`. Existing user-owned solutions or run configurations are preserved.
+
+Unity 2022's Windows overwrite checks interpret a root `<Product Name>.sln` or `UnityCommon.props` as an earlier native "Create Visual Studio Solution" build. The `.Unidot.sln` name avoids this collision. A previous Unidot-generated conflicting solution is moved into `.unidot/legacy-solutions/`; user/native solutions are never moved automatically and may still require choosing a different Unity build directory.
+
+### Agent instructions
+
+Unidot's repository `AGENTS.md` describes development of the CLI and its regression tests. The separate `templates/player-AGENTS.md` is embedded in the tool and describes game-code work in a built Player.
+
+Initialization, first automatic binding, and `generate` create/update the Player root's instructions. `build`, `run`, and `watch` check them after binding the configuration. Commands do not write instructions into arbitrary current subdirectories. Help/version remain read-only.
+
+Only the section between `<!-- unidot:agents:start -->` and `<!-- unidot:agents:end -->` is maintained. Existing user sections, encoding/BOM, and line endings remain intact; unchanged instructions are not rewritten. Malformed markers, unsupported encoding, or externally linked AGENTS files are preserved with a diagnostic.
+
+The Player instructions direct agents to linked source and Unidot commands instead of scaffolding ad-hoc game test projects in the built output. They do not restrict tool-side regression tests in the Unidot repository, and are guidance rather than a permission sandbox.
 
 Open the solution and choose **Launcher**. Rider receives a shared run configuration; Visual Studio receives `launchSettings.json`. Existing IDE user settings may require setting Launcher as the startup project once.
 
@@ -137,7 +234,9 @@ Direct MSBuild outputs are raw compiler results. `unidot build` owns postprocess
 
 `run` builds, processes, deploys, and launches; `--no-build` skips the build but still waits and follows logs. Build or deployment errors prevent launch.
 
-Unity writes a `-logFile`, and Unidot incrementally follows its UTF-8 content while forwarding native stdout/stderr. `--log-file` is relative to the terminal's current directory or can be absolute. Final lines without a newline are drained on exit.
+Unity writes a `-logFile`, and Unidot incrementally follows its UTF-8 content. Full native stdout/stderr are saved separately to `<logFile>.stdout.log` and `<logFile>.stderr.log`. `--log-file` is relative to the terminal's current directory or can be absolute. Final lines without a newline are drained on exit.
+
+Default console output shows startup/exit status, native stderr, and recognized Unity/stdout errors with stack traces. Ordinary runtime messages stay in the logs. Use `unidot run --verbose` for full live output; verbosity never changes what is saved. Unity text logs do not always have severity markers, so recognition is best-effort and the full log remains the authoritative diagnostic source.
 
 - Normal game exit ends the CLI session and propagates the exit code.
 - Ctrl+C requests window closure, waits up to five seconds, then cleans up this process tree; the command returns 130.
@@ -145,6 +244,19 @@ Unity writes a `-logFile`, and Unidot incrementally follows its UTF-8 content wh
 - On Windows, a kill-on-close Job Object cleans up the owned Player if the CLI is force-stopped.
 
 Only this session's process is managed; other game processes are not closed by name. Launcher is a startup/logging entry, not a Mono breakpoint debugger.
+
+## Optional native host (experimental)
+
+Standard EXE launch remains the default. The Windows x64 distribution also contains a thin host for Unity 2022.3's `UnityMain2` entry:
+
+```powershell
+unidot run --backend native --fallback-exe
+unidot run --keep-alive
+```
+
+The native host uses your existing `UnityPlayer.dll`, Mono runtime and data directory; Unity still owns engine initialization. A pre-entry startup failure can fall back to the original EXE when explicitly enabled and available. After engine entry, no automatic second launch is attempted. Startup status is written beside the Player log as `.native.json`; fallback logs use `.fallback.log`. This opt-in path was locally exercised on Unity 2022.3.62f3 and is not a cross-version native embedding API.
+
+`--keep-alive` keeps the CLI available after exit and accepts `restart`/`r` or `quit`/`q`. Restart creates a new Player process and performs the normal build/deploy preparation unless `--no-build` is set; it is not in-process engine restart or running-DLL hot reload.
 
 ## Compilation and ILPP
 
@@ -171,7 +283,7 @@ Unity's generators are enabled by default. Additional generators/analyzers are c
 }
 ```
 
-Paths are relative to the Unity project. Unidot loads compiled processor DLLs in a separate CLI process and calls their original `WillProcess` / `Process` implementations in configured order. It validates diagnostics and DLL/PDB outputs; processor failures prevent deployment.
+Paths are relative to the Unity project. Unidot loads compiled processor DLLs in a separate CLI worker and calls their original `WillProcess` / `Process` implementations in configured order. By default, the worker is reused within one build, with fresh processor instances for each assembly. It validates diagnostics and DLL/PDB outputs; processor failures prevent deployment.
 
 These DLLs come from an existing Unity base build/script compilation. Preparing or upgrading them remains a prerequisite. The host uses Unity's `Unity.CompilationPipeline.Common` and project Cecil/Burst dependencies; it does not generate Burst AOT native libraries or update resources and initialization manifests.
 
@@ -201,6 +313,48 @@ Known Jobs/Burst/network weaving features are checked conservatively. Without co
 ```
 
 Supported placeholders are `{dll}`, `{pdb}`, `{assembly}`, `{project}`, and `{managed}`. Arguments are passed separately without a shell. Processors update staged DLL/PDB files in place and must exit with code 0. Failure preserves the previous successful output for that assembly and prevents deployment.
+
+## Build performance
+
+The source build defaults are:
+
+```json
+{
+  "sharedCompilation": true,
+  "reuseIlppHost": true
+}
+```
+
+- Shared compilation passes `/shared` to Unity's Roslyn compiler. Roslyn manages the compiler server and its idle lifetime; a small compiler client still runs for each assembly. The first request may pay server startup cost.
+- ILPP starts a separate worker only when an assembly needs processing. One build reuses the loaded plugin assemblies, but creates a fresh processor instance for each request. The worker exits after the build, including failures or cancellation. All-cache builds start no ILPP worker.
+- Plugin static state can persist across assemblies within that build. For a processor requiring process-level isolation, set `reuseIlppHost` to `false` or use `--isolated-ilpp`.
+- A build lock serializes the workspace. Stable `.unidot/staging/current` paths keep deterministic compiler outputs stable between forced rebuilds; staged files are cleaned after the build.
+
+Compare the execution strategies with the same targets and force recompilation:
+
+```powershell
+unidot build Game.Core Game.Unity --no-deploy --force
+unidot build Game.Core Game.Unity --no-deploy --force --no-shared --isolated-ilpp
+```
+
+Both overrides also work with `run` and `watch`; they apply to that invocation without changing saved configuration. Changing either mode invalidates the input fingerprint. `--force` ensures repeated comparisons still compile instead of using cached outputs. Compiler hosts may select different runtime patch versions recorded in the PDB, so byte-for-byte equality across modes is not guaranteed. External `postProcessors` keep their existing per-assembly process model.
+
+With `--verbose`, each compiled assembly prints `[time]` compiler and Unity ILPP durations. Timings are always recorded in the build journal and `.unidot/build-report.json`, which includes `elapsedMs` and `timings` entries with `cached`, `fingerprintMs`, `compileMs`, `ilppMs`, and `totalMs`. Compiler/ILPP times include client communication and worker startup where applicable. Assembly totals include other work such as output validation and external processors; build elapsed time starts after discovery and toolchain selection.
+
+On the local Unity 2022.3.62f3 project, three forced targets took **3.97s isolated versus 1.47s with reuse** (whole CLI invocation: 4.83s versus 2.38s). A successful 73-assembly forced build took **16.49s**, or 17.68s including CLI startup/discovery. These are local measurements, not general performance guarantees. A later full isolated comparison stopped at a missing `RelayRoomMetadata` source dependency and is not a valid whole-build comparison.
+
+## Console output and diagnostics
+
+```powershell
+unidot build --no-deploy
+unidot build --no-deploy --verbose
+unidot run --verbose
+unidot watch --no-deploy --verbose
+```
+
+`build/run/watch` default to concise progress and final results. Compiler/discovery warnings, per-assembly cache/timing details and ILPP skip messages are retained in logs instead of repeated in the console. Compiler/ILPP errors remain visible; tool failures without a recognized error diagnostic show a bounded output tail. Builds summarize compiled/cached/failed targets, current-invocation warning counts and ILPP processing results, then print the log directory. Cached targets do not replay old warnings.
+
+`.unidot/logs/build-*/` contains `build.log` (stages, discovery diagnostics and full errors), `<assembly>.log` (raw compiler output), `<assembly>.ilpp.log`, `ilpp-worker.stderr.log` when applicable, and external processor logs. `.unidot/build-report.json` records status, warning counts, timings, failures and log location, including failed/cancelled builds. `--verbose` changes display only, not saved configuration, compilation inputs or cache identity.
 
 ## Deployment boundaries
 

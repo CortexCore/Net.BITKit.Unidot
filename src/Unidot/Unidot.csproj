@@ -6,7 +6,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>unidot</ToolCommandName>
     <PackageId>Net.BITKit.Unidot</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.6.0</Version>
     <Description>Independent C# build and deployment CLI for Mono Unity Players.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -16,7 +16,11 @@
     <PackageProjectUrl>https://github.com/CortexCore/Net.BITKit.Unidot</PackageProjectUrl>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="DiffPlex" Version="1.9.0" />
     <InternalsVisibleTo Include="Unidot.Tests" />
+    <ProjectReference Include="../Unidot.NativeHost/Unidot.NativeHost.csproj" ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" />
+    <EmbeddedResource Include="../../templates/player-AGENTS.md" LogicalName="Unidot.PlayerAgentInstructions.md" />
+    <None Include="../../templates/player-AGENTS.md" Pack="true" PackagePath="templates/" CopyToPublishDirectory="PreserveNewest" TargetPath="templates/player-AGENTS.md" />
     <None Include="../../README.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="README.md" />
     <None Include="../../README.zh-CN.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="README.zh-CN.md" />
     <None Include="../../docs/guide.md" Pack="true" PackagePath="docs/" CopyToPublishDirectory="PreserveNewest" TargetPath="docs/guide.md" />
@@ -24,5 +28,19 @@
     <None Include="../../CHANGELOG.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="CHANGELOG.md" />
     <None Include="../../unidot.example.json" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="unidot.example.json" />
     <None Include="../../LICENSE" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="LICENSE" />
+    <None Include="../../THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="THIRD-PARTY-NOTICES.txt" />
   </ItemGroup>
+  <Target Name="StageNativeHost" AfterTargets="Build">
+    <ItemGroup><NativeHostFiles Include="../Unidot.NativeHost/bin/$(Configuration)/$(TargetFramework)/Unidot.NativeHost.*" /></ItemGroup>
+    <Copy SourceFiles="@(NativeHostFiles)" DestinationFolder="$(OutputPath)native" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishNativeHost" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="StageNativeHost">
+    <ItemGroup>
+      <_NativeHostPublish Include="$(OutputPath)native/Unidot.NativeHost.*" />
+      <ResolvedFileToPublish Include="@(_NativeHostPublish)">
+        <RelativePath>native/%(_NativeHostPublish.Filename)%(_NativeHostPublish.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 </Project>

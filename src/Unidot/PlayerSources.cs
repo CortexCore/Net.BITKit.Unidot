@@ -47,7 +47,7 @@ internal static class PlayerSources
         throw new UnidotException("Cannot infer Unity metadata from Src. Link it to your Unity Assets source tree, or use init --project <Unity project> --src <directory>.");
     }
 
-    public static async Task LinkAsync(string source, string destination, CancellationToken cancellationToken)
+    public static async Task LinkAsync(string source, string destination, CancellationToken cancellationToken, bool announce = true)
     {
         source = Path.GetFullPath(source);
         destination = Path.GetFullPath(destination);
@@ -55,7 +55,7 @@ internal static class PlayerSources
         if (Directory.Exists(destination))
         {
             if (PathComparer.Instance.Equals(PathComparer.PhysicalDirectory(destination), PathComparer.PhysicalDirectory(source)))
-            { Console.WriteLine($"Source link already exists: {destination} -> {source}"); return; }
+            { if (announce) Console.WriteLine($"Source link already exists: {destination} -> {source}"); return; }
             throw new UnidotException($"Link destination already exists and will not be overwritten: {destination}");
         }
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -67,6 +67,6 @@ internal static class PlayerSources
             var exit = await Processes.ExecuteAsync("cmd.exe", ["/c", $"mklink /J \"{destination}\" \"{source}\""], Environment.CurrentDirectory, cancellationToken);
             if (exit != 0) throw new UnidotException("Could not create source directory junction.");
         }
-        Console.WriteLine($"Mapped source: {destination} -> {source}");
+        if (announce) Console.WriteLine($"Mapped source: {destination} -> {source}");
     }
 }

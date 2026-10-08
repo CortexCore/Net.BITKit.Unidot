@@ -4,7 +4,7 @@
 
 独立于 Unity Editor 的 C# 构建、部署和运行 CLI。以 Unity 的 `asmdef` 为程序集结构来源，复用已构建的 **Mono Unity Player**，让日常代码修改通过独立 Roslyn 编译完成。
 
-当前版本：**0.3.0 / Windows Standalone x64 / Mono**。不需要启动 Editor；需要与项目版本一致的 Unity 安装，以及已有 Player。
+当前版本：**0.6.0 Alpha / Windows Standalone x64 / Mono**。不需要启动 Editor；需要与项目版本一致的 Unity 安装，以及已有 Player。
 
 **发布状态：alpha。** 已验证游戏侧编译、ILPP、整组 DLL 替换、前台运行和 IDE Launcher 流程；跨项目兼容性仍需逐项验证。版本说明见 [CHANGELOG.md](../CHANGELOG.md)。
 
@@ -45,7 +45,7 @@ unidot build --no-deploy         # 只生成产物
 
 ```powershell
 dotnet pack src/Unidot -c Release -o artifacts/packages
-dotnet tool install --global Net.BITKit.Unidot --version 0.3.0 --add-source artifacts/packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source artifacts/packages
 ```
 
 命令 shim 位于 `%USERPROFILE%/.dotnet/tools`，该目录需在 PATH 中。升级使用 `dotnet tool update --global`。
@@ -88,6 +88,90 @@ dotnet pack src/Unidot -c Release -o artifacts/packages
 源码仓库目前不包含 Unity 安装、第三方处理器、游戏源码、Player、个人 `unidot.json` 或构建产物。上述 NuGet 安装示例使用本地生成的包；本项目尚未宣称已经发布到 nuget.org。
 
 Windows GitHub Actions 会在无需 Unity 安装的环境中构建、运行工具侧测试、生成发布目录和 `.nupkg`，并从纯本地包源验证命令安装。真实 Unity 编译/游戏运行验证按前述可选集成测试和已有 Player 单独执行。
+
+## 轻量 agent workspace
+
+在基础 Build 的上级目录执行：
+
+```powershell
+unidot workspace create agent-a --base ./Build
+unidot workspace list
+unidot workspace diff agent-a
+unidot workspace remove agent-a
+```
+
+默认容器是当前终端目录下的 `Workspaces`；四个管理命令都可用 `--root <目录>` 指定其他容器。目标必须位于基础 Player 和实际源码目录之外。基础 Player 可以继续运行，创建只读取和复制文件；基础 Unidot 构建/部署锁必须可用。真正无法读取或复制期间变化的 Managed 文件会指出具体输入并清理未完成目录，不会为创建而关闭游戏。
+
+创建读取基础 Player 目录的 `unidot.json`；没有配置时，从 Src 链接推断绑定，但不写回新的基础配置。配置在其他位置可传 `--config <文件>`；`--src <目录>` 显式选择源码，`--unity-editor <安装位置>` 覆盖工具链。创建从空目录开始，不复制整包，也不产生中间资源副本：
+
+```text
+Workspaces/agent-a/
+  Src/                         源码真实快照
+  Game.exe                     独立启动文件副本
+  UnityPlayer.dll              基础运行库文件链接
+  MonoBleedingEdge/             基础运行库目录链接
+  Game_Data/                   新建真实目录
+    Managed/                   全量 DLL/PDB/其他文件副本
+    app.info                   小型元数据副本
+    ScriptingAssemblies.json   注册信息副本（存在时）
+    StreamingAssets/           资源目录链接
+    sharedassets*.assets/.resS 大资源文件链接
+  unidot.json
+  AGENTS.md
+  .unidot/workspace.json        manifest 与初始源码哈希
+```
+
+复制 Src 时跟随原有链接，落地实际文件，保留 `.asmdef`、`.asmref`、`.meta`；跳过源码中的 `.git`、`.unidot`、`bin`、`obj`。源码和 Managed 不使用硬链接。基础目录已有的生成项目、缓存、日志和 agent 说明不会继承，新目录独立维护这些文件及备份、锁。
+
+扫描会排除原源码子树，避免重复 asmdef 或仍编译原文件；Unity 工程中的包和工具链元数据继续复用。构建范围映射到副本，全局 `Assets/csc.rsp` 单独复制。若副本程序集通过 asmref 仍拥有快照之外的源码，创建会拒绝，需先把这些源码纳入基础 Src 映射。不要把副本源码重新替换成指向原文件的链接。
+
+进入新目录后使用现有命令：
+
+```powershell
+unidot generate
+unidot build --no-deploy
+unidot build
+unidot run
+```
+
+部署只写新目录的 Managed。`run` 仍然是持久前台会话；存档位置、网络端口等游戏外部状态不由目录隔离自动解决。
+
+复制前先检查文件/目录链接能力。Windows 目录可回退到 junction，但零散资源文件需要符号链接权限（Developer Mode 或具备权限的账户）。资源链接失败不会退回大文件复制；创建失败或取消会清理本次内容，只删除链接本身，不沿链接删除基础资源。已有目标目录和路径重叠会被拒绝。
+
+共享资源及运行库不是权限只读。基础 Build 与外部链接目标必须保留。执行 Player 命令前会检查链接目标以及基础文件/目录的大小、修改时间，检测到资源变化时要求重新创建。这是兼容性检查，不是文件系统沙盒，也不会为每个大资源计算内容哈希。
+
+创建显示复制/共享数据字节数；`list` 还统计当前私有文件大小，包含缓存、日志和备份，不跟随资源链接。统计是文件逻辑大小，不是磁盘实际分配/压缩大小。`diff` 用初始 SHA-256 列出 Src 新增、修改、删除路径，不另存第二份完整源码，不生成逐行补丁，也不自动合并。`remove` 验证 manifest 所有权并检查构建/运行锁后丢弃指定 workspace；资源链接已失效时也可清理，不删除链接目标。
+
+### 源码回传与冲突解决
+
+在包含 `Workspaces` 的目录执行，或通过 `--root` 指定容器：
+
+```powershell
+unidot workspace apply agent-a --dry-run
+unidot workspace apply agent-a
+# 有冲突时，先在 Workspaces/agent-a/Src 内编辑最终结果
+unidot workspace resolve agent-a Artists/Scripts/Foo.cs
+unidot workspace apply agent-a
+```
+
+每个候选文件比较三份状态：**B** 是创建时或上次成功回传的基线；**W** 是 workspace 当前内容；**M** 是主源码当前内容。
+
+| 条件 | 处理 |
+|---|---|
+| W 等于 B | Agent 没有待回传改动，保留主源码 |
+| W 等于 M | 已经一致，不重写文件，但推进合并基线 |
+| 只有 W 改了，M 仍等于 B | 回传新增、修改或删除 |
+| 两边都改了，内容不同 | 冲突，整批不写入 |
+
+文件不存在也是一种状态：双方新增不同内容、修改与删除冲突、删除主目录已修改的文件，都需要解决。`resolve` 记录具体物理目标、B/M/W 哈希及确认时间，**不写主目录**。M 或 W 后续变化会使确认失效，准备新结果后重新 resolve。选择保留主目录内容时，把主目录当前内容复制进 workspace，使两边一致；确认删除时，workspace 文件保持不存在。可识别的冲突标记必须清除后才能确认。
+
+冲突返回非零退出码，控制台展示有限的主目录/workspace 行级差异及上下文，使用 **DiffPlex** 计算。完整报告在 `.unidot/merge-conflicts.diff`、`.unidot/merge-report.json`。文本支持 UTF-8 与带 BOM 的 UTF-16/32；二进制、不支持的编码及超过 1 MiB 的文本显示哈希摘要。这是诊断视图，不是可执行补丁，也不做自动三方文本合并，不为 diff 额外保存一整份初始源码。
+
+**Resolved** 表示 agent 已准备并确认结果；**Applied** 表示写入、哈希校验及 `.unidot/workspace-apply.json` 的合并基线更新成功。`.unidot/workspace.json` 的创建快照保持不变，所以 `workspace diff` 仍对比创建时内容，后续 apply 则以最近成功合并为基线。回传完成不等于代码构建/行为验证通过，之后仍需正常验证源码。
+
+回传仅处理 Src 改动及元数据，排除 `.git`、`.unidot`、`bin`、`obj` 与 DLL/PDB/EXE/NuGet 构建二进制；Managed、资源、日志不会回传。文件按字节复制，保留 BOM、编码和换行。新 manifest 固定物理源码根，旧 Player 的 Src 链接即使被改指向，也不会重定向回传。0.5 旧 workspace 使用已记录的 Src/排除范围解析目标，拒绝范围外的新指向。
+
+`--dry-run` 可以更新本地诊断报告，但不修改源码或合并状态。实际 apply 锁定 workspace 管理/构建活动，并串行化目标目录重叠的 Unidot 回传；预检查整批，保存 `.unidot/apply-backups/` 备份/事务记录，暂存结果，在写入前后重新校验。失败或取消会回滚；若外部编辑器在已写文件回滚前又修改它，会保留外部改动并指出备份及人工恢复位置。这些检查不封锁任意外部编辑器，也不是跨文件的崩溃原子事务。没有强制覆盖选项。
 
 ## Unity 安装路径
 
@@ -137,10 +221,11 @@ unidot init --project "D:\Games\MyGame.Unity" --player "D:\Games\MyGame.Build" `
 
 ```text
 unidot.json
+AGENTS.md
+<产品名>.Unidot.sln   # 例如 Project B.Unidot.sln，位于工作目录顶层
+.run/Launcher.run.xml
 .unidot/
-  <产品名>.sln          # 例如 Project B.sln
   Launcher/Launcher.csproj
-  .run/Launcher.run.xml
   graph.json
   projects/<程序集>/<程序集>.csproj
   bin/<程序集>/<程序集>.dll + .pdb
@@ -219,7 +304,19 @@ unidot restore --backup ".unidot/backups/<批次>/manifest.json"
 
 解决方案按 `Player_Data/app.info` 中的产品名命名，缺失时使用 Player 文件名；配置的 `productName` 可覆盖显示名称。生成的 **Launcher** 是独立 .NET 8 可执行项目，不引用游戏项目，只调用已安装的 `unidot run`。解决方案的默认 Build 配置只构建 Launcher，游戏 DLL/ILPP 仍由 Unidot 管理。
 
-打开 `.unidot/Project B.sln` 后，选择 **Launcher** 点播放。Visual Studio 使用 Launcher 的 `launchSettings.json`；首次打开或已有 IDE 用户配置时，必要时手动将 Launcher 设为启动项目。Rider 提供共享的 `.run/Launcher.run.xml` 配置。IDE Run/Console 显示编译和 Unity 日志，无需断点调试连接。
+打开工作目录顶层的 `Project B.Unidot.sln` 后，选择 **Launcher** 点播放。Visual Studio 使用 Launcher 的 `launchSettings.json`；首次打开或已有 IDE 用户配置时，必要时手动将 Launcher 设为启动项目。Rider 提供顶层 `.run/Launcher.run.xml` 共享配置。IDE Run/Console 显示编译和 Unity 日志，无需断点调试连接。已有用户解决方案或运行配置不会被覆盖。
+
+Unity 2022 Windows 覆盖检查把打包根目录的 `<ProductName>.sln` 或 `UnityCommon.props` 视作之前的原生“Create Visual Studio Solution”构建。`.Unidot.sln` 命名避开这个判断。旧版 Unidot 生成的冲突方案会移到 `.unidot/legacy-solutions/` 留存；用户/原生方案不会自动移动，确实存在这些标记时仍可能需要换 Unity 输出目录。
+
+### Agent 工作流说明
+
+仓库自身的 `AGENTS.md` 面向 Unidot CLI 开发，正常维护工具侧回归测试；`templates/player-AGENTS.md` 是嵌入 CLI 的独立 Player 模板，说明链接源码、命令、日志和游戏测试的位置。
+
+`init`、首次自动绑定和 `generate` 会创建或更新 Player 根目录的说明；`build/run/watch` 完成配置绑定后检查补齐。不会因终端位于某个子目录就在那里添加文件，`--help/--version` 保持无副作用。
+
+已有 `AGENTS.md` 只更新 `<!-- unidot:agents:start -->` 与 `<!-- unidot:agents:end -->` 之间的内容，保留用户区块、编码/BOM 和换行。不变时不重写；标记损坏、无法安全识别的编码和链接到外部的说明文件会保留并提示。
+
+Player 模板要求通过 Unidot 验证，不在构建产物根目录临时搭游戏测试工程；确需测试时使用原源码测试体系。规则不会限制 Unidot 仓库的工具测试，也不是权限沙盒。
 
 ### 前台运行与日志
 
@@ -229,7 +326,9 @@ unidot run --no-build --log-file "logs/session.log"
 unidot run -- --mode=no-init
 ```
 
-Unity 使用 `-logFile` 写入文件，Unidot 增量跟随 UTF-8 日志，同时转发原生 stdout/stderr。默认日志仍在 `.unidot/logs/`，`--log-file` 相对当前终端目录，可指定绝对路径。最后一行没有换行也会在退出时收尾。
+Unity 使用 `-logFile` 写入文件，Unidot 增量跟随 UTF-8 日志，原生 stdout/stderr 完整保存到 `<日志文件>.stdout.log`、`<日志文件>.stderr.log`。默认日志仍在 `.unidot/logs/`，`--log-file` 相对当前终端目录，可指定绝对路径。最后一行没有换行也会在退出时收尾。
+
+默认控制台显示启动/退出状态、原生 stderr，以及可识别的 Unity/stdout 错误和后续堆栈，普通消息保留在日志中。`unidot run --verbose` 显示完整实时输出，不影响日志保存。Unity 文本日志并非总带明确级别，识别属于尽力处理，完整日志仍是排查依据。
 
 - 游戏主动退出：Unidot 输出退出码并结束会话。
 - Ctrl+C：先请求本次 Player 关闭窗口，最多等待 5 秒，再清理本次进程树；返回 130。
@@ -273,6 +372,19 @@ dotnet msbuild .unidot/projects/Game.Unity/Game.Unity.csproj /t:Build /p:UnidotU
 
 这不是 Unity 完整构建环境导出的替代品：Player 的 Development/API/功能符号应与配置一致，特殊编译符号可通过 `defines` 补充。平台范围目前限制为 Windows x64 Mono。
 
+## 可选原生宿主（实验性）
+
+默认仍启动原 Player EXE。Windows x64 分发包也包含调用 Unity 2022.3 `UnityMain2` 入口的薄宿主：
+
+```powershell
+unidot run --backend native --fallback-exe
+unidot run --keep-alive
+```
+
+宿主使用已有 `UnityPlayer.dll`、Mono 运行库和数据目录，引擎初始化仍由 Unity 负责。显式启用回退且原 EXE 可用时，进入引擎之前的启动失败可以回退；进入引擎后不会自动再启动一次。状态写入 Player 日志旁的 `.native.json`，回退使用 `.fallback.log`。这个可选入口曾在 Unity 2022.3.62f3 本机运行验证，不是跨版本的原生嵌入 API。
+
+`--keep-alive` 在游戏退出后保留 CLI，接受 `restart`/`r`、`quit`/`q`。重启创建新的 Player 进程，并按正常流程准备编译/部署（`--no-build` 除外），不是进程内引擎重启或运行中 DLL 热更新。
+
 ## Source Generator 与 IL 后处理
 
 两者是不同阶段：
@@ -292,7 +404,7 @@ v1 **不会自动发现 Unity 的全部 ILPostProcessor**。它对已知 Jobs/Bu
 
 ### 独立运行 Unity ILPP
 
-`unityIlppPlugins` 接受已编译的 Unity ILPostProcessor DLL，路径相对 Unity 工程。构建时在独立 CLI 子进程内按配置顺序执行 `WillProcess` / `Process`，无需启动 Editor。每次处理的诊断和 DLL/PDB 结果都经过检查；失败时不部署。
+`unityIlppPlugins` 接受已编译的 Unity ILPostProcessor DLL，路径相对 Unity 工程。构建时在独立 CLI worker 内按配置顺序执行 `WillProcess` / `Process`，无需启动 Editor。默认在同一次构建中复用 worker 和插件程序集，每个目标创建新的处理器实例。每次处理的诊断和 DLL/PDB 结果都经过检查；失败时不部署。
 
 Project B 已验证的配置（插件版本应与基础 Player 一致）：
 
@@ -332,6 +444,48 @@ unidot ilpp --dll path/to/Game.dll --pdb path/to/Game.pdb --processor path/to/Co
 ```
 
 占位符：`{dll}`、`{pdb}`、`{assembly}`、`{project}`、`{managed}`。参数逐个传递，不经过 shell。处理器必须原地更新暂存 DLL/PDB，并以 0 退出；失败时不部署、不替换该程序集上一份成功产物。SourceTrace 集成留待后续。
+
+## 构建性能
+
+源码构建默认启用：
+
+```json
+{
+  "sharedCompilation": true,
+  "reuseIlppHost": true
+}
+```
+
+- **共享编译器**：传递 `/shared` 给 Unity 自带 Roslyn，由 Roslyn 管理服务器和空闲退出时间。每个程序集仍启动轻量编译客户端，首次请求可能包含服务器启动成本。
+- **复用 ILPP**：遇到需要处理的程序集才启动独立 worker。同一次构建保留已加载的插件程序集，每次请求创建新的处理器实例。构建结束、失败或取消时关闭 worker；全部命中缓存时不启动它。
+- 插件的静态状态可能跨程序集保留。需要进程级隔离的处理器可以设置 `reuseIlppHost: false`，或传入 `--isolated-ilpp`。
+- workspace 构建锁保证串行使用 `.unidot/staging/current`。固定暂存路径让确定性编译在强制重编时保持产物哈希稳定；构建结束后清理暂存文件。
+
+对同一组目标强制重编，比较两种执行方式：
+
+```powershell
+unidot build Game.Core Game.Unity --no-deploy --force
+unidot build Game.Core Game.Unity --no-deploy --force --no-shared --isolated-ilpp
+```
+
+两个开关也支持 `run` 和 `watch`，只覆盖本次命令，不改已保存配置；切换任一模式会使输入指纹失效。重复比较时使用 `--force`，保证重新编译而不是命中缓存。两种编译器宿主可能选择不同运行时补丁版本，PDB 会记录这种差异，因此不保证跨模式产物逐字节相同。外部 `postProcessors` 仍按原有方式逐程序集启动。
+
+使用 `--verbose` 时，每个编译目标输出 `[time]`，显示 csc 和 Unity ILPP 时间。时间始终保存在构建日志及 `.unidot/build-report.json` 的 `elapsedMs` 与 `timings` 中，包含 `cached`、`fingerprintMs`、`compileMs`、`ilppMs`、`totalMs`。编译/ILPP 时间包含客户端通信及首次 worker 启动；目标总耗时还包含校验、外部处理器等工作。构建总耗时从扫描与工具链选择完成后开始计时。
+
+本机 Unity 2022.3.62f3 项目实测：三个目标强制重编，**独立进程 3.97 秒 → 默认复用 1.47 秒**；包含 CLI 启动/扫描则是 4.83 秒 → 2.38 秒。曾成功完成 **73 个程序集强制重编，构建 16.49 秒，整条命令 17.68 秒**。这是本机测量，不保证其他项目同样表现。之后的全量独立进程对照因源码依赖缺少 `RelayRoomMetadata` 停止，不能作为完整全量对比。
+
+## 控制台输出与诊断
+
+```powershell
+unidot build --no-deploy
+unidot build --no-deploy --verbose
+unidot run --verbose
+unidot watch --no-deploy --verbose
+```
+
+`build/run/watch` 默认只输出简洁进度与最终结果。编译/扫描警告、逐程序集缓存/计时、ILPP skip 详情留在日志，编译/ILPP 错误仍即时显示；没有明确错误诊断的工具失败会显示有限的输出尾部。构建汇总编译/缓存/失败数量、本次产生的警告数及 ILPP 处理结果，并打印日志目录。命中缓存的目标不重复播放旧警告。
+
+`.unidot/logs/build-*/` 保存 `build.log`（阶段、扫描诊断及完整错误）、`<程序集>.log`（原始编译器输出）、`<程序集>.ilpp.log`，以及适用时的 `ilpp-worker.stderr.log` 和外部处理器日志。`.unidot/build-report.json` 记录状态、警告数量、计时、失败及日志位置，失败/取消时也更新。`--verbose` 只影响显示，不修改保存的配置、编译输入或缓存身份。
 
 ## 部署约束
 
