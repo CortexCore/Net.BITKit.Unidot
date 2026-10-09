@@ -457,7 +457,7 @@ unidot ilpp --dll path/to/Game.dll --pdb path/to/Game.pdb --processor path/to/Co
 ```
 
 - **共享编译器**：传递 `/shared` 给 Unity 自带 Roslyn，由 Roslyn 管理服务器和空闲退出时间。每个程序集仍启动轻量编译客户端，首次请求可能包含服务器启动成本。
-- **复用 ILPP**：遇到需要处理的程序集才启动独立 worker。同一次构建保留已加载的插件程序集，每次请求创建新的处理器实例。构建结束、失败或取消时关闭 worker；全部命中缓存时不启动它。
+- **复用 ILPP**：遇到需要处理的程序集才启动独立 worker。同一次构建保留已加载的插件程序集，每次请求创建新的处理器实例。处理完成后先等待 worker 退出，再部署，避免插件/Cecil 缓存的读取句柄锁住 Player DLL；失败或取消时也清理 worker，全部命中缓存时不启动它。
 - 插件的静态状态可能跨程序集保留。需要进程级隔离的处理器可以设置 `reuseIlppHost: false`，或传入 `--isolated-ilpp`。
 - workspace 构建锁保证串行使用 `.unidot/staging/current`。固定暂存路径让确定性编译在强制重编时保持产物哈希稳定；构建结束后清理暂存文件。
 

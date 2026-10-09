@@ -179,6 +179,16 @@ internal sealed class BuildEngine(Configuration config, UnityToolchain toolchain
                     Console.Error.WriteLine($"[failed] {node.Name}: {error.Message}");
                 }
             }
+            // Cecil resolvers inside reusable ILPP plugins can retain Player DLL read handles.
+            // Wait for the host process to exit before testing/replacing any Player file.
+            currentAssembly = "ilpp-shutdown";
+            if (ilppWorker is not null)
+            {
+                var completedWorker = ilppWorker;
+                ilppWorker = null;
+                await completedWorker.DisposeAsync();
+                diagnostics.Detail("[ilpp worker] Exited; Player reference handles released before deployment.");
+            }
             currentAssembly = "deployment";
             if (options.Deploy) Deployment.Deploy(config, player, built);
             SaveReport(failures.Count == 0 ? "succeeded" : "failed");
@@ -193,7 +203,12 @@ internal sealed class BuildEngine(Configuration config, UnityToolchain toolchain
             diagnostics.Record("failure", error.ToString());
             failures.Add(new(currentAssembly, error.Message, false));
             SaveReport(error is OperationCanceledException ? "cancelled" : "failed");
-            Console.Error.WriteLine($"Build {(error is OperationCanceledException ? "cancelled" : "failed")}: {compiled} compiled, {cached} cached, {diagnostics.Warnings} warnings, {buildTimer.Elapsed.TotalSeconds:F2}s.");
+            if (currentAssembly == "deployment")
+            {
+                Console.WriteLine($"Compilation succeeded: {compiled} compiled, {cached} cached, {diagnostics.Warnings} warnings.");
+                Console.Error.WriteLine($"Deployment {(error is OperationCanceledException ? "cancelled" : "failed")}; compiled outputs retained. {buildTimer.Elapsed.TotalSeconds:F2}s.");
+            }
+            else Console.Error.WriteLine($"Build {(error is OperationCanceledException ? "cancelled" : "failed")}: {compiled} compiled, {cached} cached, {diagnostics.Warnings} warnings, {buildTimer.Elapsed.TotalSeconds:F2}s.");
             throw;
         }
         finally

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 — Unreleased
+
+- **Fixed:** exit and await the reusable Unity ILPP worker before deployment. Cecil caches inside NetRpc processors can retain Player DLL read handles; deploying before worker disposal caused repeatable sharing violations even after the game closed.
+- Keep the finally cleanup for failed/cancelled builds without double-disposing a completed host.
+- Report completed compilation separately when only deployment fails; compiled outputs remain available for retry.
+- Regression-test a processor retaining a Player DLL stream until host exit, successful deployment after release, and diagnostics for a genuine external lock.
+
 ## 0.6.0 — Alpha
 
 GitHub release including the previously local-only 0.3.1–0.5.1 development milestones below.

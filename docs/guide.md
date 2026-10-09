@@ -326,7 +326,7 @@ The source build defaults are:
 ```
 
 - Shared compilation passes `/shared` to Unity's Roslyn compiler. Roslyn manages the compiler server and its idle lifetime; a small compiler client still runs for each assembly. The first request may pay server startup cost.
-- ILPP starts a separate worker only when an assembly needs processing. One build reuses the loaded plugin assemblies, but creates a fresh processor instance for each request. The worker exits after the build, including failures or cancellation. All-cache builds start no ILPP worker.
+- ILPP starts a separate worker only when an assembly needs processing. One build reuses the loaded plugin assemblies, but creates a fresh processor instance for each request. After processing, the worker exits before deployment so plugin/Cecil reference handles cannot lock Player DLLs. Failures/cancellation also clean it up. All-cache builds start no ILPP worker.
 - Plugin static state can persist across assemblies within that build. For a processor requiring process-level isolation, set `reuseIlppHost` to `false` or use `--isolated-ilpp`.
 - A build lock serializes the workspace. Stable `.unidot/staging/current` paths keep deterministic compiler outputs stable between forced rebuilds; staged files are cleaned after the build.
 

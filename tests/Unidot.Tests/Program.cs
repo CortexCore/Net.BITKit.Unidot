@@ -1085,19 +1085,24 @@ static void CompilerIntegration(string editor)
         using Unity.CompilationPipeline.Common.ILPostProcessing;
         public sealed class ProbeProcessor : ILPostProcessor {
             private static int calls;
+            private static System.IO.FileStream retainedReference;
             private int instanceCalls;
             public override ILPostProcessor GetInstance() => this;
             public override bool WillProcess(ICompiledAssembly assembly) => true;
             public override ILPostProcessResult Process(ICompiledAssembly assembly) {
                 foreach (var define in assembly.Defines)
                     if (define == "UNIDOT_TEST_CANCEL") System.Threading.Thread.Sleep(30000);
+                    else if (define == "UNIDOT_TEST_HOLD_REFERENCE") {
+                        retainedReference = new System.IO.FileStream(@"PLAYER_REFERENCE_PATH", System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);
+                        System.Console.WriteLine("Held-Player-reference; PID=" + System.Diagnostics.Process.GetCurrentProcess().Id);
+                    }
                 calls++; instanceCalls++;
                 return new ILPostProcessResult(null, new List<DiagnosticMessage> {
                     new DiagnosticMessage { DiagnosticType = DiagnosticType.Warning, MessageData = "calls=" + calls + "; instance=" + instanceCalls }
                 });
             }
         }
-        """);
+        """.Replace("PLAYER_REFERENCE_PATH", fixture.PathOf("Player/Test_Data/Managed/C.dll").Replace("\"", "\"\"", StringComparison.Ordinal), StringComparison.Ordinal));
     var compile = new List<string> { "exec", toolchain.Compiler, "/noconfig", "/target:library", "/nostdlib+", "/nologo", "/out:" + plugin,
         "/reference:" + Path.Combine(toolchain.DataDirectory, "Tools", "ilpp", "Unity.CompilationPipeline.Common", "Unity.CompilationPipeline.Common.dll"), pluginSource };
     compile.AddRange(Directory.EnumerateFiles(api, "*.dll").Select(p => "/reference:" + p));
@@ -1126,6 +1131,40 @@ static void CompilerIntegration(string editor)
     }
     finally { client.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     Check(!Alive(workerPid), "ILPP worker survived build disposal.");
+    // A real processor can retain Player reference streams in static Cecil caches until its host exits.
+    File.Copy(partial.Outputs["C"], Path.Combine(fixture.Player.ManagedDirectory, "C.dll"), true);
+    var oldC = new ContentHashes().Get(Path.Combine(fixture.Player.ManagedDirectory, "C.dll"));
+    fixture.Write("Unity/Assets/C/C.cs", "public class Independent { public const int Changed = 1; }");
+    var originalDefines = fixture.Config.Defines;
+    fixture.Config.Defines = originalDefines.Concat(["UNIDOT_TEST_HOLD_REFERENCE"]).ToArray();
+    fixture.Config.Save(configPath);
+    var retainedBuild = new BuildEngine(fixture.Config, toolchain, fixture.Scan(), fixture.Player)
+        .BuildAsync(["C"], new(Force: true), CancellationToken.None).GetAwaiter().GetResult();
+    Equal(1, retainedBuild.Compiled);
+    Check(new ContentHashes().Get(Path.Combine(fixture.Player.ManagedDirectory, "C.dll")) != oldC, "Retained ILPP reference blocked private deployment.");
+    using (var report = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Config.GeneratedDirectory, "build-report.json"))))
+    {
+        var logDirectory = report.RootElement.GetProperty("logDirectory").GetString()!;
+        var log = File.ReadAllText(Path.Combine(logDirectory, "C.ilpp.log"));
+        var match = System.Text.RegularExpressions.Regex.Match(log, @"Held-Player-reference; PID=(\d+)");
+        Check(match.Success && !Alive(int.Parse(match.Groups[1].Value)), "Retaining processor host was not closed before deployment completed.");
+        Check(File.ReadAllText(Path.Combine(logDirectory, "build.log")).Contains("released before deployment", StringComparison.Ordinal), "Worker release stage was not recorded.");
+    }
+    fixture.Config.Defines = originalDefines; fixture.Config.Save(configPath);
+    fixture.Write("Unity/Assets/C/C.cs", "public class Independent { public const int Changed = 2; }");
+    var beforeBlockedDeployment = new ContentHashes().Get(Path.Combine(fixture.Player.ManagedDirectory, "C.dll"));
+    using (new FileStream(Path.Combine(fixture.Player.ManagedDirectory, "C.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
+    using (var console = new StringWriter())
+    using (var errors = new StringWriter())
+    {
+        var oldOutput = Console.Out; var oldErrors = Console.Error; var blocked = false;
+        Console.SetOut(console); Console.SetError(errors);
+        try { new BuildEngine(fixture.Config, toolchain, fixture.Scan(), fixture.Player).BuildAsync(["C"], new(Force: true), CancellationToken.None).GetAwaiter().GetResult(); }
+        catch (IOException) { blocked = true; }
+        finally { Console.SetOut(oldOutput); Console.SetError(oldErrors); }
+        Check(blocked && console.ToString().Contains("Compilation succeeded", StringComparison.Ordinal) && errors.ToString().Contains("Deployment failed", StringComparison.Ordinal), "External lock was not reported as a deployment-only failure.");
+    }
+    Equal(beforeBlockedDeployment, new ContentHashes().Get(Path.Combine(fixture.Player.ManagedDirectory, "C.dll")));
     fixture.Config.UnityIlppPlugins = []; fixture.Config.Save(configPath);
 
     File.Copy(third.Outputs["B"], Path.Combine(fixture.Player.ManagedDirectory, "B.dll"), true);
