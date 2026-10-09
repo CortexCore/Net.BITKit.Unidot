@@ -6,7 +6,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>unidot</ToolCommandName>
     <PackageId>Net.BITKit.Unidot</PackageId>
-    <Version>0.6.1</Version>
+    <Version>0.8.0</Version>
     <Description>Independent C# build and deployment CLI for Mono Unity Players.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -16,15 +16,20 @@
     <PackageProjectUrl>https://github.com/CortexCore/Net.BITKit.Unidot</PackageProjectUrl>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../Shared/UnityPlayerValidation.cs" Link="UnityPlayerValidation.cs" />
     <PackageReference Include="DiffPlex" Version="1.9.0" />
+    <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <InternalsVisibleTo Include="Unidot.Tests" />
     <ProjectReference Include="../Unidot.NativeHost/Unidot.NativeHost.csproj" ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" />
+    <ProjectReference Include="../Unidot.Runtime/Unidot.Runtime.csproj" ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" />
+    <EmbeddedResource Include="../Unidot.Runtime/Bootstrap.cs" LogicalName="Unidot.Runtime.Bootstrap.cs" />
     <EmbeddedResource Include="../../templates/player-AGENTS.md" LogicalName="Unidot.PlayerAgentInstructions.md" />
     <None Include="../../templates/player-AGENTS.md" Pack="true" PackagePath="templates/" CopyToPublishDirectory="PreserveNewest" TargetPath="templates/player-AGENTS.md" />
     <None Include="../../README.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="README.md" />
     <None Include="../../README.zh-CN.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="README.zh-CN.md" />
     <None Include="../../docs/guide.md" Pack="true" PackagePath="docs/" CopyToPublishDirectory="PreserveNewest" TargetPath="docs/guide.md" />
     <None Include="../../docs/guide.zh-CN.md" Pack="true" PackagePath="docs/" CopyToPublishDirectory="PreserveNewest" TargetPath="docs/guide.zh-CN.md" />
+    <None Include="../../docs/mcp.md" Pack="true" PackagePath="docs/" CopyToPublishDirectory="PreserveNewest" TargetPath="docs/mcp.md" />
     <None Include="../../CHANGELOG.md" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="CHANGELOG.md" />
     <None Include="../../unidot.example.json" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="unidot.example.json" />
     <None Include="../../LICENSE" Pack="true" PackagePath="/" CopyToPublishDirectory="PreserveNewest" TargetPath="LICENSE" />
@@ -34,9 +39,25 @@
     <ItemGroup><NativeHostFiles Include="../Unidot.NativeHost/bin/$(Configuration)/$(TargetFramework)/Unidot.NativeHost.*" /></ItemGroup>
     <Copy SourceFiles="@(NativeHostFiles)" DestinationFolder="$(OutputPath)native" SkipUnchangedFiles="true" />
   </Target>
-  <Target Name="PublishNativeHost" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="StageNativeHost">
+  <Target Name="BuildRuntimeHook" AfterTargets="StageNativeHost">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)/../Unidot.RuntimeHook/Build.ps1&quot; -OutputDirectory &quot;$(MSBuildProjectDirectory)/$(OutputPath)native&quot;" />
+  </Target>
+  <Target Name="StageRuntime" AfterTargets="Build">
+    <ItemGroup><RuntimeFiles Include="../Unidot.Runtime/bin/$(Configuration)/netstandard2.0/*.dll" Exclude="../Unidot.Runtime/bin/$(Configuration)/netstandard2.0/Unidot.Runtime.dll" /></ItemGroup>
+    <Copy SourceFiles="@(RuntimeFiles)" DestinationFolder="$(OutputPath)runtime" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishRuntime" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="StageRuntime">
     <ItemGroup>
-      <_NativeHostPublish Include="$(OutputPath)native/Unidot.NativeHost.*" />
+      <_RuntimePublish Include="$(OutputPath)runtime/*.dll" />
+      <ResolvedFileToPublish Include="@(_RuntimePublish)">
+        <RelativePath>runtime/%(_RuntimePublish.Filename)%(_RuntimePublish.Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+  <Target Name="PublishNativeHost" BeforeTargets="ComputeFilesToPublish" DependsOnTargets="StageNativeHost;BuildRuntimeHook">
+    <ItemGroup>
+      <_NativeHostPublish Include="$(OutputPath)native/Unidot.NativeHost.*;$(OutputPath)native/Unidot.RuntimeHook.dll" />
       <ResolvedFileToPublish Include="@(_NativeHostPublish)">
         <RelativePath>native/%(_NativeHostPublish.Filename)%(_NativeHostPublish.Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

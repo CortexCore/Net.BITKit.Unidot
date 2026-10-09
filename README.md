@@ -81,6 +81,14 @@ Player arguments go after `--`, for example `unidot run -- --mode=no-init`. See 
 
 Source builds reuse Unity's Roslyn compiler server and an ILPP worker by default. Per-assembly timings appear in the console and `.unidot/build-report.json`; use `--no-shared` / `--isolated-ilpp` for isolated-process diagnostics. See [build performance](docs/guide.md#build-performance).
 
+## Agent MCP (0.8.0 development build)
+
+```powershell
+unidot mcp --player "D:\Games\MyGame.Build" --unity-editor "C:\Program Files\Unity\Hub\Editor\2022.3.62f3"
+```
+
+Configure the Agent to launch this as a **stdio MCP server**. Unidot starts the original Player EXE in the background, injects the runtime, and exposes `runtime_status`, `compile_code`, `execute_compiled`, and `execute_code`. Compiler/Player logs go to stderr; closing Agent stdin stops the owned Player. Windows x64 Unity 2022 Mono is the current target; live acceptance covers 2022.3.14f1c1, 2022.3.20f1 and 2022.3.62f3. See [Agent configuration and code examples](docs/mcp.md). This command is not included in the published 0.6.0 release.
+
 ## Lightweight agent workspaces
 
 ```powershell

@@ -7,4 +7,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/UnityPlayerValidation.cs" Link="UnityPlayerValidation.cs" />
+  </ItemGroup>
 </Project>

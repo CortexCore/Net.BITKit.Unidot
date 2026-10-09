@@ -3,8 +3,51 @@ using System.Diagnostics;
 using System.Text;
 using System.Xml.Linq;
 using Unidot;
+using System.IO.Pipelines;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 
 if (args.Contains("--fail-postprocess")) return 9;
+if (args.Contains("--fake-compiler"))
+{
+    var response = File.ReadAllLines(args.Single(a => a.StartsWith('@'))[1..]);
+    var output = response.Single(a => a.StartsWith("/out:"))[5..].Trim('"');
+    var source = File.ReadAllText(response[^1].Trim('"'));
+    if (source == "WAIT") { await Task.Delay(Timeout.Infinite); return 0; }
+    if (source == "INVALID") { Console.WriteLine("Script.cs(2,3): error CS9999: regression compiler failure"); return 1; }
+    File.Copy(typeof(Fixture).Assembly.Location, output);
+    File.WriteAllText(Path.ChangeExtension(output, ".pdb"), "symbols");
+    return 0;
+}
+if (args.Length == 3 && args[0] == "--mcp-stdio-host")
+{
+    // Real SDK protocol on both sides, with a deterministic fake Unity endpoint.
+    var toRuntime = new Pipe(); var fromRuntime = new Pipe();
+    using var stop = new CancellationTokenSource();
+    await using var runtimeServer = McpServer.Create(new StreamServerTransport(toRuntime.Reader.AsStream(), fromRuntime.Writer.AsStream()),
+        new McpServerOptions
+        {
+            ToolCollection = new McpServerPrimitiveCollection<McpServerTool>
+            {
+                McpServerTool.Create(() => "fake-unity-status", new() { Name = "runtime_status" }),
+                McpServerTool.Create((string assemblyPath, string typeName, string methodName) =>
+                    File.Exists(assemblyPath) && typeName == "Script" && methodName == "Run" ? "fake-executed" : "bad-invocation",
+                    new() { Name = "invoke_assembly" })
+            }
+        });
+    var runtimeTask = runtimeServer.RunAsync(stop.Token);
+    await using var runtimeClient = await McpClient.CreateAsync(new StreamClientTransport(toRuntime.Writer.AsStream(), fromRuntime.Reader.AsStream()));
+    var fakeToolchain = new UnityToolchain(args[1], Environment.ProcessPath!, "--fake-compiler", "2022.3.62f3");
+    var fakePlayer = new PlayerLayout("unused", args[1], args[2]);
+    var compiler = new RuntimeCodeCompiler(fakeToolchain, fakePlayer, args[1], args[2], false);
+    var tools = new McpTools(runtimeClient, compiler, args[1], "fake-player.log");
+    var options = new McpServerOptions { ToolCollection = tools.CreateTools() };
+    await using var server = McpServer.Create(new StdioServerTransport(options), options);
+    try { await server.RunAsync(); }
+    finally { stop.Cancel(); try { await runtimeTask; } catch (OperationCanceledException) { } }
+    return 0;
+}
 if (args.Contains("--fake-tool"))
 {
     Console.WriteLine("tool-detail");
@@ -69,11 +112,17 @@ var tests = new List<(string Name, Action Test)>
     ("Workspace origin routes, legacy manifests, links and source locks stay bounded", WorkspaceApplyBoundaries),
     ("Concise tool output retains full logs, counts warnings and surfaces failures", ToolOutput),
     ("Native fallback requires pre-entry status and forwards the correct log path", NativeFallback),
+    ("Native staging links legacy UnityMain data without replacing original Player files", NativeLegacyData),
     ("Foreground session streams UTF-8 logs and propagates normal exit", ForegroundExit),
     ("Concise Player output preserves errors, stack traces and all native/file logs", ForegroundConcise),
     ("Cancellation closes only the owned Player process", ForegroundCancellation),
     ("Parent exit cancels the CLI lifetime", ParentExit),
-    ("CLI rejects malformed options and Editor symbols", ArgumentsAndDefines)
+    ("CLI rejects malformed options and Editor symbols", ArgumentsAndDefines),
+    ("MCP launch options are bounded and standalone configuration stays read-only", McpArguments),
+    ("Original-EXE launch keeps identity/data paths and injection failures clean owned processes", OriginalExeInjection),
+    ("Unity engine versions and Mono discovery do not depend on business/resource filenames", PlayerIdentification),
+    ("Runtime compiler isolates generations, prioritizes Player references and retains errors", RuntimeCompiler),
+    ("MCP stdio lists tools, compiles/executes, recovers from errors and exits on EOF", McpStdio)
 };
 if (OperatingSystem.IsWindows()) tests.Add(("Force-stopping a session host cleans up its owned Player job", JobLifetime));
 var unityEditor = args.Length == 2 && args[0] == "--unity-editor" ? args[1] : null;
@@ -86,6 +135,163 @@ foreach (var (name, test) in tests)
 }
 Console.WriteLine($"{tests.Count - failed}/{tests.Count} tests passed.");
 return failed == 0 ? 0 : 1;
+
+static void McpArguments()
+{
+    using var fixture = new Fixture();
+    fixture.CopyManaged("mscorlib.dll");
+    var cli = Arguments.Parse(["mcp", "--player", fixture.Player.RootDirectory, "--unity-editor", fixture.Root,
+        "--startup-timeout", "12", "--", "-screen-width", "800"]);
+    Equal("12", cli.Value("startup-timeout"));
+    Equal(12, McpSession.TimeoutSeconds(cli));
+    Equal("-screen-width,800", string.Join(',', cli.PlayerArguments));
+    var config = McpSession.LoadConfiguration(cli);
+    Equal(fixture.Player.RootDirectory, config.Player);
+    Check(!File.Exists(Path.Combine(fixture.Player.RootDirectory, "unidot.json")), "MCP standalone binding unexpectedly wrote configuration.");
+    Throws(() => McpSession.TimeoutSeconds(Arguments.Parse(["mcp", "--startup-timeout", "0"])), "1-300");
+    Throws(() => Arguments.Parse(["mcp", "--fallback-exe"]), "not supported");
+    Throws(() => Arguments.Parse(["mcp", "unexpected"]), "positional");
+    Throws(() => Arguments.Parse(["mcp", "--native-host", "custom.exe"]), "not supported");
+}
+
+static void NativeLegacyData()
+{
+    using var fixture = new Fixture();
+    fixture.Write("Install/native/Unidot.NativeHost.exe", "host-apphost");
+    fixture.Write("Install/native/Unidot.NativeHost.dll", "host-library");
+    fixture.Write("Player/Test_Data/globalgamemanagers", "original-resource");
+    var original = File.ReadAllBytes(fixture.Player.Executable);
+    var start = NativePlayerBackend.CreateAsync(fixture.Config, fixture.Player, fixture.PathOf("Player.log"),
+        fixture.PathOf("native.json"), [], fixture.PathOf("Install/native/Unidot.NativeHost.exe"), CancellationToken.None).GetAwaiter().GetResult();
+    var alias = fixture.PathOf("Player/.unidot/native-host/Unidot.NativeHost_Data");
+    Equal(PathComparer.PhysicalDirectory(fixture.Player.DataDirectory), PathComparer.PhysicalDirectory(alias));
+    Equal("original-resource", File.ReadAllText(Path.Combine(alias, "globalgamemanagers")));
+    Check(original.SequenceEqual(File.ReadAllBytes(fixture.Player.Executable)), "Original Player EXE was replaced.");
+    Check(start.FileName.EndsWith("Unidot.NativeHost.exe") && start.WorkingDirectory == fixture.Player.RootDirectory, "Legacy staging changed game working directory.");
+}
+
+static void PlayerIdentification()
+{
+    var china = UnityPlayerValidation.ParseVersion("2022.3.14f1c1 (25540d4d24fc)");
+    Equal("2022.3.14f1c1", china.Name);
+    Equal("2022.3.62f3", UnityPlayerValidation.ParseVersion("2022.3.62f3_96770f904ca7").Name);
+    Equal("2022.3.14f1c1", UnityPlayerValidation.ParseVersion("2022.3.14f1c1_25540d4d24fc").Name);
+    Check(china.SupportsMcp && china.Patch == 14, "China patch version was not identified.");
+    Check(UnityPlayerValidation.ParseVersion("2022.3.62f3").SupportsMcp, "Known Player version rejected.");
+    Check(UnityPlayerValidation.ParseVersion("2022.2.1f1").SupportsMcp &&
+        !UnityPlayerValidation.ParseVersion("2021.3.30f1").SupportsMcp &&
+        !UnityPlayerValidation.ParseVersion("2023.1.0f1").SupportsMcp, "Supported engine year boundary is incorrect.");
+    try { UnityPlayerValidation.ParseVersion("not-a-unity-version"); throw new Exception("Unknown version accepted."); }
+    catch (ArgumentException) { }
+    using var fixture = new Fixture();
+    fixture.CopyManaged("mscorlib.dll");
+    // No Assembly-CSharp.dll or globalgamemanagers: a custom-asmdef-only Mono layout is valid.
+    fixture.CopyManaged("Custom.Game.dll");
+    fixture.Write("Player/Test_Data/globalgamemanagers.assets", "resource-part");
+    Check(UnityPlayerValidation.HasMonoLayout(fixture.Player.RootDirectory, fixture.Player.DataDirectory), "A resource filename incorrectly determined the scripting backend.");
+    File.Delete(fixture.Player.Executable);
+    var discovered = PlayerLayout.Discover(fixture.Player.RootDirectory, requireExecutable: false);
+    Equal(fixture.Player.DataDirectory, discovered.DataDirectory);
+    fixture.Write("Player/GameAssembly.dll", "IL2CPP marker");
+    Check(!UnityPlayerValidation.HasMonoLayout(fixture.Player.RootDirectory, fixture.Player.DataDirectory), "IL2CPP treated as Mono.");
+}
+
+static void OriginalExeInjection()
+{
+    using var fixture = new Fixture();
+    var original = PlayerSession.StandardStart(fixture.Player, ["-screen-fullscreen", "0"], fixture.PathOf("Player.log"));
+    Equal(fixture.Player.Executable, original.FileName);
+    Equal(fixture.Player.RootDirectory, original.WorkingDirectory);
+    Check(!original.ArgumentList.Contains("--data-dir"), "Original-EXE startup changed the game's data-directory contract.");
+    var log = fixture.PathOf("failed-injection.log");
+    var pid = fixture.PathOf("failed-injection.pid");
+    var start = SelfStart(["--fake-player", "--stay-open", "-logFile", log, "--pid-file", pid]);
+    using var cancellation = new CancellationTokenSource(500);
+    try
+    {
+        PlayerSession.RunProcessAsync(start, log, cancellation.Token, TextWriter.Null, injectOriginal: true).GetAwaiter().GetResult();
+        throw new Exception("Fake console Player unexpectedly supported main-window injection.");
+    }
+    catch (UnidotException error) when (error.Message.Contains("hook is missing")) { }
+    catch (OperationCanceledException) { }
+    if (File.Exists(pid))
+    {
+        var child = int.Parse(File.ReadAllText(pid));
+        try { using var process = Process.GetProcessById(child); Check(process.HasExited, "Failed injection left its owned Player running."); }
+        catch (ArgumentException) { }
+    }
+}
+
+static void RuntimeCompiler()
+{
+    using var fixture = new Fixture();
+    var managed = fixture.CopyManaged("Unidot.dll");
+    fixture.Write("runtime/Unidot.dll", "must-not-win");
+    fixture.Write("runtime/Extra.dll", "extra-reference");
+    var start = SelfStart([]);
+    Check(start.ArgumentList.Count == 0, "Regression compiler requires the test executable apphost.");
+    var compiler = new RuntimeCodeCompiler(new(fixture.Root, start.FileName, "--fake-compiler", "2022.3.62f3"),
+        fixture.Player, fixture.PathOf("session"), fixture.PathOf("runtime"), false);
+    var references = compiler.References();
+    Check(references.Contains(managed) && !references.Contains(fixture.PathOf("runtime/Unidot.dll")), "Runtime dependencies shadowed the Player's existing assembly.");
+    var first = compiler.CompileAsync("VALID", "Script", "Run", CancellationToken.None).GetAwaiter().GetResult();
+    var second = compiler.CompileAsync("VALID", "Script", "Run", CancellationToken.None).GetAwaiter().GetResult();
+    Check(first.Success && second.Success && first.Id != second.Id && first.AssemblyPath != second.AssemblyPath, "Compilation generations share an identity/path.");
+    Check(File.Exists(first.AssemblyPath) && File.ReadAllText(first.SourcePath) == "VALID", "Compilation outputs/source were not preserved.");
+    var error = compiler.CompileAsync("INVALID", "Script", "Run", CancellationToken.None).GetAwaiter().GetResult();
+    Check(!error.Success && error.Diagnostics.Contains("CS9999"), "Compiler failure diagnostics lost.");
+    using var cancellation = new CancellationTokenSource(250);
+    try { compiler.CompileAsync("WAIT", "Script", "Run", cancellation.Token).GetAwaiter().GetResult(); throw new Exception("Compiler did not cancel."); }
+    catch (OperationCanceledException) { }
+    var response = RuntimeCodeCompiler.ResponseFile([managed], first.SourcePath, first.AssemblyPath);
+    Check(response.Contains("/nostdlib+") && response.Contains("/debug:portable") && response.Contains("Unidot.Execution."), "Runtime response is not using Player framework/unique output.");
+    Throws(() => RuntimeCodeCompiler.ResponseFile([], "bad\npath.cs", "out.dll"), "newlines");
+}
+
+static void McpStdio()
+{
+    using var fixture = new Fixture();
+    fixture.CopyManaged("Unidot.dll");
+    var start = SelfStart(["--mcp-stdio-host", fixture.Root, fixture.Player.ManagedDirectory]);
+    using var process = Process.Start(new ProcessStartInfo(start.FileName)
+    {
+        WorkingDirectory = fixture.Root, UseShellExecute = false, RedirectStandardInput = true,
+        RedirectStandardOutput = true, RedirectStandardError = true,
+        ArgumentList = { "--mcp-stdio-host", fixture.Root, fixture.Player.ManagedDirectory }
+    })!;
+    var stderr = process.StandardError.ReadToEndAsync();
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    try
+    {
+        Run().GetAwaiter().GetResult();
+        process.StandardInput.Close();
+        process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
+        Equal(0, process.ExitCode);
+    }
+    finally { if (!process.HasExited) { process.Kill(true); process.WaitForExit(); } }
+
+    async Task Run()
+    {
+        await using var client = await McpClient.CreateAsync(new StreamClientTransport(
+            process.StandardInput.BaseStream, process.StandardOutput.BaseStream), cancellationToken: timeout.Token);
+        var tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
+        Equal("compile_code,execute_code,execute_compiled,runtime_status", string.Join(',', tools.Select(t => t.Name).Order()));
+        var status = await client.CallToolAsync("runtime_status", cancellationToken: timeout.Token);
+        Check(status.Content.OfType<TextContentBlock>().Any(t => t.Text == "fake-unity-status"), "Runtime call was not forwarded.");
+        var compilation = await client.CallToolAsync("compile_code", new Dictionary<string, object?> { ["code"] = "VALID" }, cancellationToken: timeout.Token);
+        Check(compilation.IsError != true, "Successful compilation reported failure.");
+        using var value = JsonDocument.Parse(compilation.Content.OfType<TextContentBlock>().Single().Text);
+        var id = value.RootElement.GetProperty("compilationId").GetString();
+        var executed = await client.CallToolAsync("execute_compiled", new Dictionary<string, object?> { ["compilationId"] = id }, cancellationToken: timeout.Token);
+        Check(executed.Content.OfType<TextContentBlock>().Any(t => t.Text == "fake-executed"), "Compiled entry was not invoked.");
+        var failed = await client.CallToolAsync("compile_code", new Dictionary<string, object?> { ["code"] = "INVALID" }, cancellationToken: timeout.Token);
+        Check(failed.IsError == true && failed.Content.OfType<TextContentBlock>().Any(t => t.Text.Contains("CS9999")), "Compiler errors did not reach MCP.");
+        var missing = await client.CallToolAsync("execute_compiled", new Dictionary<string, object?> { ["compilationId"] = "unknown" }, cancellationToken: timeout.Token);
+        Check(missing.IsError == true, "Unknown compilation was accepted.");
+        var recovered = await client.CallToolAsync("execute_code", new Dictionary<string, object?> { ["code"] = "VALID" }, cancellationToken: timeout.Token);
+        Check(recovered.Content.OfType<TextContentBlock>().Any(t => t.Text == "fake-executed"), "MCP did not recover after tool errors.");
+    }
+}
 
 static void Scanner()
 {

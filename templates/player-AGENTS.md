@@ -29,6 +29,13 @@ unidot run{{CONFIG_ARGUMENT}}
 - Ctrl+C closes only the Player owned by that session. For automated runtime verification, plan a timeout or explicit stop step; do not wait indefinitely for a game to quit.
 - Pass game arguments after `--`, for example `unidot run{{CONFIG_ARGUMENT}} -- --my arg`.
 
+## Agent runtime MCP
+
+- An Agent can launch `unidot mcp{{CONFIG_ARGUMENT}}` as a stdio server to own a new Unity 2022 Mono Player session. It starts the original EXE in the background and injects only that owned process. When no source binding exists, use `--player <Player directory> --unity-editor <matching installation>`.
+- Tools are `runtime_status`, `compile_code`, `execute_compiled`, and `execute_code`. Source is a complete C# type with a public static parameterless entry (`Script.Run` by default), returning a value or Task. Calls run on the Unity main thread.
+- stdout is protocol-only; logs use stderr/files. Closing the Agent's stdin stops its Player. Do not start a second manual Player or mix human-readable stdout with MCP traffic.
+- Snippet compilation adds session-local assemblies; it does not replace existing game assemblies or run game ILPP. Use normal build/run for original source deployment. Execution timeouts do not forcibly interrupt user code already running.
+
 ## Testing policy
 
 - Do not scaffold an ad-hoc `dotnet test` project, test runner, or test SDK in this built Player directory merely to validate a game-code change.

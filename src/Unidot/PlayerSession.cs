@@ -23,8 +23,15 @@ internal static class PlayerSession
         using (sessionLock)
         {
             options ??= new(config.RunBackend, config.NativeFallbackToExe, config.NativeHost);
-            ProcessStartInfo Standard(string? targetLog = null) => StandardStart(player, forwarded, targetLog ?? log);
-            if (options.Backend == "exe") return await RunProcessAsync(Standard(), log, cancellationToken, verbose: config.Verbose);
+            ProcessStartInfo Standard(string? targetLog = null)
+            {
+                var start = StandardStart(player, forwarded, targetLog ?? log);
+                if (options.Environment is not null)
+                    foreach (var (key, value) in options.Environment) start.Environment[key] = value;
+                if (options.InjectOriginal) start.WindowStyle = ProcessWindowStyle.Minimized;
+                return start;
+            }
+            if (options.Backend == "exe") return await RunProcessAsync(Standard(), log, cancellationToken, verbose: config.Verbose, injectOriginal: options.InjectOriginal);
             if (options.Backend != "native") throw new UnidotException("Run backend must be exe or native.");
             var diagnostics = log + ".native.json";
             ProcessStartInfo native;
@@ -34,6 +41,8 @@ internal static class PlayerSession
                 Console.Error.WriteLine("Native preflight failed: " + error.Message + " Falling back to standard EXE.");
                 return await RunProcessAsync(Standard(), log, cancellationToken, verbose: config.Verbose);
             }
+            if (options.Environment is not null)
+                foreach (var (key, value) in options.Environment) native.Environment[key] = value;
             int result;
             try { result = await RunProcessAsync(native, log, cancellationToken, verbose: config.Verbose); }
             catch (Win32Exception error) when (options.FallbackToExe && player.HasExecutable)
@@ -63,7 +72,7 @@ internal static class PlayerSession
         return start;
     }
 
-    internal static async Task<int> RunProcessAsync(ProcessStartInfo start, string logPath, CancellationToken cancellationToken, TextWriter? destination = null, bool verbose = false)
+    internal static async Task<int> RunProcessAsync(ProcessStartInfo start, string logPath, CancellationToken cancellationToken, TextWriter? destination = null, bool verbose = false, bool injectOriginal = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         logPath = Path.GetFullPath(logPath);
@@ -88,6 +97,7 @@ internal static class PlayerSession
         Task streams = Task.CompletedTask;
         Task follow = Task.CompletedTask;
         var cancelled = false;
+        OriginalPlayerInjection? injection = null;
         try
         {
             job?.Assign(process);
@@ -110,6 +120,7 @@ internal static class PlayerSession
                 finally { await console.CompleteAsync(); await log.FlushAsync(); }
             }
             streams = Task.WhenAll(PumpAsync(process.StandardOutput, stdoutLog, stdout), PumpAsync(process.StandardError, stderrLog, stderr));
+            if (injectOriginal) injection = await OriginalPlayerInjection.AttachAsync(process, cancellationToken);
             try { await process.WaitForExitAsync(cancellationToken); }
             catch (OperationCanceledException)
             {
@@ -121,6 +132,7 @@ internal static class PlayerSession
         finally
         {
             if (!process.HasExited) await StopAsync(process);
+            injection?.Dispose();
             // Finish the file tail, including a final line without a newline. Descendant-held stdout pipes are bounded.
             try { await streams.WaitAsync(TimeSpan.FromSeconds(2)); } catch (OperationCanceledException) { } catch (TimeoutException) { }
             drain.Cancel();

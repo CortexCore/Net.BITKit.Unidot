@@ -17,6 +17,16 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Prepare x64 runtime-hook compiler
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'tcc-win64.zip'
+          Invoke-WebRequest 'https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27-win64-bin.zip' -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '34A721949A2583FDFF725312DA092FA0F5F1F284B702E6F811C6954714FAABB2') { throw 'Unexpected TinyCC archive hash' }
+          $directory = Join-Path $env:RUNNER_TEMP 'tcc-toolchain'
+          Expand-Archive $zip -DestinationPath $directory
+          "UNIDOT_TCC=$directory/tcc/tcc.exe" >> $env:GITHUB_ENV
+
       - name: Build
         run: dotnet build Unidot.sln -c Release --verbosity minimal
 

@@ -33,6 +33,7 @@ internal static class Program
         var cli = Arguments.Parse(args);
         if (cli.Command is "help" or "--help" or "-h" || cli.Has("help")) { Help(); return 0; }
         if (cli.Command is "--version" or "version") { Console.WriteLine("Unidot " + ToolVersion); return 0; }
+        if (cli.Command == "mcp") return await McpSession.RunAsync(cli, cancellationToken);
         if (cli.Command == "workspace") return await WorkspaceManager.ExecuteAsync(cli, cancellationToken);
         if (cli.Command == "link")
         {
@@ -269,6 +270,8 @@ internal static class Program
         unidot build [assembly ...] [--no-dependencies] [--no-deploy] [--force] [--keep-going]
         unidot run [--src Src] [--no-build] [--force] [--log-file <path>] [-- <Player arguments ...>]
                    [--backend exe|native] [--fallback-exe] [--keep-alive]
+        unidot mcp [--player <Mono Player.exe or directory>] [--unity-editor <matching installation>]
+                   [--startup-timeout <1-300 seconds>] [--log-file <path>] [-- <Player arguments ...>]
         unidot watch [assembly ...] [--no-dependencies] [--no-deploy]
         unidot restore [--backup <manifest.json>]
         unidot audit
@@ -287,6 +290,8 @@ internal static class Program
         Cached registry/git packages remain binary dependencies unless explicitly targeted.
         Generated Player projects and outputs live in .unidot beside unidot.json.
         run builds, postprocesses and deploys, then follows the Player log until exit. Ctrl+C closes the Player.
+        mcp starts the original Unity 2022 Mono Player EXE and injects its owned main thread; stdio is MCP-only.
+        MCP tools: runtime_status, compile_code, execute_compiled, execute_code. stdin EOF closes the Player.
         <Product Name>.Unidot.sln and .run configurations live at the workspace root; Launcher is the IDE startup project.
         Workspace commands maintain only Unidot's managed section in Player AGENTS.md; help/version are read-only.
         """);
@@ -307,10 +312,10 @@ internal sealed class Arguments
         var result = new Arguments();
         if (args.Length == 0) return result;
         result.Command = args[0];
-        if (result.Command is not ("help" or "--help" or "-h" or "--version" or "version" or "init" or "generate" or "graph" or "build" or "run" or "watch" or "restore" or "audit" or "ilpp" or "ilpp-worker" or "link" or "workspace"))
+        if (result.Command is not ("help" or "--help" or "-h" or "--version" or "version" or "init" or "generate" or "graph" or "build" or "run" or "mcp" or "watch" or "restore" or "audit" or "ilpp" or "ilpp-worker" or "link" or "workspace"))
             throw new UnidotException($"Unknown command '{result.Command}'. Run unidot --help.");
         var flags = new HashSet<string>(["help", "no-dependencies", "no-deploy", "no-build", "force", "development", "keep-going", "fallback-exe", "keep-alive", "no-shared", "isolated-ilpp", "verbose", "dry-run"], StringComparer.Ordinal);
-        var valued = new HashSet<string>(["config", "project", "player", "unity-editor", "assembly", "define", "source-root", "build-root", "reference-mode", "api-profile", "backup", "dll", "pdb", "processor", "rsp", "src", "source", "path", "ilpp-plugin", "log-file", "parent-pid", "backend", "native-host", "base", "root"], StringComparer.Ordinal);
+        var valued = new HashSet<string>(["config", "project", "player", "unity-editor", "assembly", "define", "source-root", "build-root", "reference-mode", "api-profile", "backup", "dll", "pdb", "processor", "rsp", "src", "source", "path", "ilpp-plugin", "log-file", "parent-pid", "backend", "native-host", "base", "root", "startup-timeout"], StringComparer.Ordinal);
         for (var i = 1; i < args.Length; i++)
         {
             if (args[i] == "-h") { result.options["help"] = ["true"]; continue; }
@@ -330,8 +335,8 @@ internal sealed class Arguments
             if (!result.options.TryGetValue(name, out var list)) result.options[name] = list = [];
             list.Add(value);
         }
-        if (result.PlayerArguments.Length > 0 && result.Command != "run") throw new UnidotException("Arguments after -- are only supported by unidot run.");
-        if (result.Command is "init" or "generate" or "run" or "restore" && result.Positionals.Count > 0)
+        if (result.PlayerArguments.Length > 0 && result.Command is not ("run" or "mcp")) throw new UnidotException("Arguments after -- are only supported by unidot run or mcp.");
+        if (result.Command is "init" or "generate" or "run" or "mcp" or "restore" && result.Positionals.Count > 0)
             throw new UnidotException($"{result.Command} does not accept positional arguments.");
         var allowed = new HashSet<string>(["config", "help"], StringComparer.Ordinal);
         if (result.Command is "init" or "generate" or "graph" or "build" or "watch" or "run") allowed.UnionWith(["unity-editor", "src"]);
@@ -342,6 +347,7 @@ internal sealed class Arguments
         if (result.Command == "ilpp") allowed.UnionWith(["dll", "pdb", "processor", "rsp"]);
         if (result.Command == "ilpp-worker") allowed.Add("processor");
         if (result.Command == "run") allowed.UnionWith(["no-build", "force", "no-dependencies", "log-file", "parent-pid", "backend", "native-host", "fallback-exe", "keep-alive", "no-shared", "isolated-ilpp", "verbose"]);
+        if (result.Command == "mcp") allowed.UnionWith(["player", "unity-editor", "src", "startup-timeout", "log-file", "parent-pid", "no-shared", "verbose"]);
         if (result.Command == "link") allowed.UnionWith(["source", "path"]);
         if (result.Command == "workspace")
         {

@@ -2,6 +2,11 @@
 
 This repository contains the **Unidot CLI**, not a built game or its user scripts.
 
+## Product direction
+
+- Read [development intent](docs/development-intent.md) before expanding MCP, runtime execution, or hot-update capabilities.
+- Prioritize a fast, reliable Agent source-edit-to-visible-result loop. Keep tool scope minimal; player recreation/hot-update architecture is a deferred candidate, not an MCP prerequisite.
+
 ## Code and generated files
 
 - CLI implementation: `src/Unidot/`.

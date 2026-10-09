@@ -3,7 +3,8 @@ using System.Text.Json;
 
 namespace Unidot;
 
-internal sealed record PlayerLaunchOptions(string Backend = "exe", bool FallbackToExe = false, string? NativeHost = null);
+internal sealed record PlayerLaunchOptions(string Backend = "exe", bool FallbackToExe = false, string? NativeHost = null,
+    IReadOnlyDictionary<string, string>? Environment = null, bool InjectOriginal = false);
 
 internal static class NativePlayerBackend
 {
@@ -24,6 +25,8 @@ internal static class NativePlayerBackend
             }
             var mono = Path.Combine(player.RootDirectory, "MonoBleedingEdge");
             if (Directory.Exists(mono)) await PlayerSources.LinkAsync(mono, Path.Combine(prepared, "MonoBleedingEdge"), cancellationToken);
+            // Older 2022.3 Players only export UnityMain, which derives data from the executable's name.
+            await PlayerSources.LinkAsync(player.DataDirectory, Path.Combine(prepared, "Unidot.NativeHost_Data"), cancellationToken);
             host = Path.Combine(prepared, "Unidot.NativeHost.exe");
         }
         var start = new ProcessStartInfo(host) { WorkingDirectory = player.RootDirectory, UseShellExecute = false };

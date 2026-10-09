@@ -142,7 +142,8 @@ internal sealed record PlayerLayout(string Executable, string DataDirectory, str
             else if (!requireExecutable)
             {
                 var dataCandidates = System.IO.Directory.EnumerateDirectories(path, "*_Data")
-                    .Where(p => File.Exists(Path.Combine(p, "globalgamemanagers"))).ToArray();
+                    .Where(p => UnityPlayerValidation.HasMonoLayout(path, p) ||
+                        (allowIl2cpp && File.Exists(Path.Combine(path, "GameAssembly.dll")))).ToArray();
                 if (dataCandidates.Length != 1) throw new UnidotException($"Expected one Unity data directory in {path}; specify its original Player .exe path to disambiguate.");
                 executable = Path.Combine(path, Path.GetFileName(dataCandidates[0])[..^5] + ".exe");
             }
@@ -155,9 +156,8 @@ internal sealed record PlayerLayout(string Executable, string DataDirectory, str
         var managed = Path.Combine(data, "Managed");
         if (!System.IO.Directory.Exists(data)) throw new UnidotException($"Unity data directory not found: {data}");
         var il2cpp = File.Exists(Path.Combine(root, "GameAssembly.dll"));
-        if (!(allowIl2cpp && il2cpp) && (!System.IO.Directory.Exists(managed) || !File.Exists(Path.Combine(managed, "mscorlib.dll")) ||
-            !System.IO.Directory.Exists(Path.Combine(root, "MonoBleedingEdge")) || File.Exists(Path.Combine(root, "GameAssembly.dll")))
-            ) throw new UnidotException("Code compilation/deployment requires Mono with an intact Managed directory. IL2CPP can only use a no-build runtime backend.");
+        if (!(allowIl2cpp && il2cpp) && !UnityPlayerValidation.HasMonoLayout(root, data))
+            throw new UnidotException("Code compilation/deployment requires Mono with an intact Managed directory. IL2CPP can only use a no-build runtime backend.");
         return new(Path.GetFullPath(executable), data, managed);
     }
 }

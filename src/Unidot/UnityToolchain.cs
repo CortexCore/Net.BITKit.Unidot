@@ -44,6 +44,25 @@ internal sealed record UnityToolchain(string DataDirectory, string Dotnet, strin
         }
         throw new UnidotException($"Cannot locate Unity {version} Roslyn toolchain. Set UNIDOT_UNITY_EDITOR or use --unity-editor <path>.");
     }
+
+    public static UnityToolchain DiscoverForPlayer(Configuration config)
+    {
+        if (File.Exists(Path.Combine(config.UnityProject, "ProjectSettings", "ProjectVersion.txt"))) return Discover(config);
+        var requested = !string.IsNullOrWhiteSpace(config.UnityEditor) ? config.UnityEditor :
+            Environment.GetEnvironmentVariable("UNIDOT_UNITY_EDITOR") ?? Environment.GetEnvironmentVariable("UNITY_EDITOR");
+        if (requested is null) throw new UnidotException("A standalone Player requires --unity-editor <matching Unity installation> for MCP code compilation.");
+        var root = Path.GetFullPath(requested);
+        if (File.Exists(root)) root = Path.GetDirectoryName(root)!;
+        foreach (var data in new[] { root, Path.Combine(root, "Data"), Path.Combine(root, "Editor", "Data") })
+        {
+            var compiler = Path.Combine(data, "DotNetSdkRoslyn", "csc.dll");
+            var dotnet = Path.Combine(data, "NetCoreRuntime", "dotnet.exe");
+            var editor = Path.Combine(Path.GetDirectoryName(data)!, "Unity.exe");
+            if (File.Exists(compiler) && File.Exists(dotnet) && File.Exists(editor))
+                return new(Path.GetFullPath(data), dotnet, compiler, FileVersionInfo.GetVersionInfo(editor).ProductVersion ?? "unknown");
+        }
+        throw new UnidotException("Cannot locate the supplied Unity compiler/toolchain: " + requested);
+    }
 }
 
 internal static class PathComparer

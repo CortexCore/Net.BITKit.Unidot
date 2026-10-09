@@ -40,8 +40,14 @@ internal static class Program
             if (library is null || data is null) throw new ArgumentException("--unity-player and --data-dir are required.");
             library = Path.GetFullPath(library); data = Path.GetFullPath(data);
             if (!File.Exists(library)) throw new FileNotFoundException("UnityPlayer.dll not found.", library);
-            if (!Directory.Exists(data) || !File.Exists(Path.Combine(data, "globalgamemanagers"))) throw new DirectoryNotFoundException("Unity data directory is missing or incomplete: " + data);
+            if (!Directory.Exists(data)) throw new DirectoryNotFoundException("Unity data directory not found: " + data);
             var root = Path.GetDirectoryName(library)!;
+            if (Environment.GetEnvironmentVariable("UNIDOT_RUNTIME_BOOTSTRAP") is not null)
+            {
+                UnityPlayerValidation.RequireMonoLayout(root, data);
+                var engine = UnityPlayerValidation.ReadVersion(library);
+                if (!engine.SupportsMcp) throw new PlatformNotSupportedException("Runtime MCP supports Unity 2022 Mono; actual engine: " + engine.Name);
+            }
             Directory.SetCurrentDirectory(root);
             State(diagnostics, phase, false, null, library, data);
             phase = "load";
@@ -52,21 +58,27 @@ internal static class Program
             if (module == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not load UnityPlayer.dll or one of its dependencies.");
             phase = "entry";
             var address = GetProcAddress(module, "UnityMain2");
+            var entry = "UnityMain2";
+            if (address == IntPtr.Zero) { address = GetProcAddress(module, "UnityMain"); entry = "UnityMain"; }
             if (address == IntPtr.Zero)
-                throw new EntryPointNotFoundException("UnityMain2 is unavailable; this host requires the Unity 2022.3 custom-data-folder entry. Standard EXE fallback may be used.");
+                throw new EntryPointNotFoundException("Neither UnityMain2 nor UnityMain is available. Standard EXE fallback may be used.");
             var main = Marshal.GetDelegateForFunctionPointer<UnityMain2>(address);
             var dataPointer = Marshal.StringToHGlobalUni(data);
             var commandPointer = Marshal.StringToHGlobalUni(string.Join(' ', forwarded.Select(QuoteWindowsArgument)));
             try
             {
+                using var bootstrap = Environment.GetEnvironmentVariable("UNIDOT_RUNTIME_BOOTSTRAP") is { } runtimeAssembly
+                    ? new MonoBootstrap(runtimeAssembly) : null;
                 // This is the same native entry used by Unity 2022.3's official WindowsPlayer Main.cpp.
                 // Unity owns engine, graphics, window, scripting and scene initialization.
                 phase = "entering-unity";
                 State(diagnostics, phase, true, null, library, data);
-                Console.WriteLine($"[native host] PID {Environment.ProcessId}; UnityMain2; data={data}");
+                Console.WriteLine($"[native host] PID {Environment.ProcessId}; {entry}; data={data}");
                 Console.Out.Flush();
                 entered = true;
-                var result = main(GetModuleHandleW(null), dataPointer, commandPointer, 1);
+                // Exports.h: UnityMain's second argument is hPrevInstance, not a data-folder string.
+                // Both Windows x64 entry points share the remaining ABI; the legacy path uses the staged data alias.
+                var result = main(GetModuleHandleW(null), entry == "UnityMain2" ? dataPointer : IntPtr.Zero, commandPointer, 1);
                 State(diagnostics, "returned", true, null, library, data, result);
                 return result;
             }
