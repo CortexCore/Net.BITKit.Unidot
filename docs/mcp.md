@@ -2,7 +2,7 @@
 
 `unidot mcp` starts and owns the original Unity Mono Player EXE, injects a runtime server on its message/main thread, and exposes standard MCP over stdin/stdout. The Agent starts this command as a child process; no second terminal, manual game launch, TCP port, or post-launch attachment is needed. Since 0.8.0, the game starts minimized/background by default and its original executable identity, working directory and data path are preserved. `Application.runInBackground` is enabled for the Agent-owned session.
 
-Added in the local 0.7.0 development build. The published 0.6.0 release does not include this command.
+Introduced during 0.7.0 development and distributed in the 0.8.0 Alpha release.
 
 ## Launch
 

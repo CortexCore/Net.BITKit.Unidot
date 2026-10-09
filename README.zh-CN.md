@@ -21,13 +21,13 @@ unidot run
 
 ### 1. 安装
 
-从 [v0.6.0 Alpha Release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.6.0) 下载 `Net.BITKit.Unidot.0.6.0.nupkg`，放入本地 `packages` 目录，然后执行：
+从 [v0.8.0 Alpha Release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.8.0) 下载 `Net.BITKit.Unidot.0.8.0.nupkg`，放入本地 `packages` 目录，然后执行：
 
 ```powershell
-dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source ./packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.8.0 --add-source ./packages
 ```
 
-也可以下载同一 Release 中的 `Unidot-v0.6.0-windows.zip`，解压后将其目录加入 `PATH`。ZIP 需要 .NET 8 Runtime；安装 .NET Tool 需要 SDK。当前安装包通过 GitHub Releases 提供，尚未发布到 nuget.org。已有安装可使用同样版本/包源执行 `dotnet tool update --global`；替换已安装工具前先结束其运行会话。
+也可以下载同一 Release 中的 `Unidot-v0.8.0-windows.zip`，解压后将其目录加入 `PATH`。ZIP 需要 .NET 8 Runtime；安装 .NET Tool 需要 SDK。当前安装包通过 GitHub Releases 提供，尚未发布到 nuget.org。已有安装可使用同样版本/包源执行 `dotnet tool update --global`；替换已安装工具前先结束其运行会话。
 
 ### 2. 链接源码
 
@@ -81,13 +81,13 @@ unidot run
 
 源码构建默认复用 Unity Roslyn 编译服务器和 ILPP worker，控制台及 `.unidot/build-report.json` 显示逐程序集耗时。排查时可用 `--no-shared` / `--isolated-ilpp` 切回独立进程，详见[构建性能](docs/guide.zh-CN.md#构建性能)。
 
-## Agent MCP（0.8.0 开发版）
+## Agent MCP（0.8.0 Alpha）
 
 ```powershell
 unidot mcp --player "D:\Games\MyGame.Build" --unity-editor "C:\Program Files\Unity\Hub\Editor\2022.3.62f3"
 ```
 
-让 Agent 将此命令作为 **stdio MCP 服务**启动。Unidot 后台启动原游戏 EXE 并自动注入，提供 `runtime_status`、`compile_code`、`execute_compiled`、`execute_code`；编译和游戏日志走 stderr，Agent 关闭 stdin 后自动停止本次 Player。当前目标为 Windows x64、Unity 2022 Mono，已验收 2022.3.14f1c1、2022.3.20f1、2022.3.62f3。配置和代码示例见 [MCP 使用说明](docs/mcp.md)。已发布的 0.6.0 尚不包含此命令。
+让 Agent 将此命令作为 **stdio MCP 服务**启动。Unidot 后台启动原游戏 EXE 并自动注入，提供 `runtime_status`、`compile_code`、`execute_compiled`、`execute_code`；编译和游戏日志走 stderr，Agent 关闭 stdin 后自动停止本次 Player。当前目标为 Windows x64、Unity 2022 Mono，已验收 2022.3.14f1c1、2022.3.20f1、2022.3.62f3。配置和代码示例见 [MCP 使用说明](docs/mcp.md)。
 
 ## 轻量 agent workspace
 

@@ -4,7 +4,7 @@
 
 独立于 Unity Editor 的 C# 构建、部署和运行 CLI。以 Unity 的 `asmdef` 为程序集结构来源，复用已构建的 **Mono Unity Player**，让日常代码修改通过独立 Roslyn 编译完成。
 
-当前版本：**0.6.0 Alpha / Windows Standalone x64 / Mono**。不需要启动 Editor；需要与项目版本一致的 Unity 安装，以及已有 Player。
+当前版本：**0.8.0 Alpha / Windows Standalone x64 / Mono**。不需要启动 Editor；需要与项目版本一致的 Unity 安装，以及已有 Player。Agent 的 stdio 编译/执行入口见 [MCP 使用说明](mcp.md)。
 
 **发布状态：alpha。** 已验证游戏侧编译、ILPP、整组 DLL 替换、前台运行和 IDE Launcher 流程；跨项目兼容性仍需逐项验证。版本说明见 [CHANGELOG.md](../CHANGELOG.md)。
 
@@ -45,14 +45,14 @@ unidot build --no-deploy         # 只生成产物
 
 ```powershell
 dotnet pack src/Unidot -c Release -o artifacts/packages
-dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source artifacts/packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.8.0 --add-source artifacts/packages
 ```
 
 命令 shim 位于 `%USERPROFILE%/.dotnet/tools`，该目录需在 PATH 中。升级使用 `dotnet tool update --global`。
 
 ## 开发与运行
 
-需要 .NET 8 SDK 或更新版本。
+需要 .NET 8 SDK 或更新版本。构建 Unidot 源码还需 x64 TinyCC 0.9.27：将 `UNIDOT_TCC` 设置为 `tcc.exe` 路径，或将其加入 PATH，详见 [原 EXE 桥接构建](mcp.md#building-the-original-exe-bridge)。发布包已包含桥接 DLL，最终用户无需安装 C 编译器。
 
 ```powershell
 dotnet build Unidot.sln

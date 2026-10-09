@@ -1,28 +1,31 @@
 # Changelog
 
-## 0.8.0 — Unreleased
+## 0.8.0 — Alpha (2026-10-10)
+
+GitHub release including the previously local-only 0.6.1–0.7.3 milestones below.
 
 - Make MCP launch the original Player EXE, preserving its identity, data path and native loader dependencies. Inject the external bootstrap using a small x64 message-hook DLL only into the process just started and owned by this session.
 - Start MCP games minimized/background by default, keep stdio protocol-only, and retain Job Object/EOF cleanup. The custom NativeHost remains available for explicit `run --backend native`.
 - Build the native bridge with x64 TinyCC; ship the compiled DLL so end users still need only the .NET/Unity prerequisites. Expose Development Build state in runtime_status; injection does not require a debugger-enabled build.
 - Accept the original-EXE path on CYANBRAIN 2022.3.14f1c1, including runtime status and read-only main-thread scene/object inspection. This fixes the prior substitute-host launch failure without game-specific asset changes.
+- Verify original-EXE MCP on non-development BITFALL 2022.3.20f1, including main-thread object queries, compiled-ID execution returning 42, and EOF cleanup. Release build and 37 tool-side regression tests pass.
 
-## 0.7.3 — Unreleased
+## 0.7.3 — Development milestone, included in 0.8.0
 
 - Accept Unity ProductVersion values with underscore build hashes, such as the installed compiler's `2022.3.62f3_96770f904ca7`; keep China suffix support. Report malformed compiler versions as CLI errors rather than unhandled exceptions.
 
-## 0.7.2 — Unreleased
+## 0.7.2 — Development milestone, included in 0.8.0
 
 - Identify the actual Player engine from UnityPlayer.dll ProductVersion and PE architecture, including China suffixes such as 2022.3.14f1c1. Validate the compiler's engine family separately; do not classify the game using the supplied compiler version.
 - Share Mono layout validation between CLI and NativeHost. Remove globalgamemanagers and Assembly-CSharp filename assumptions from discovery/preflight; retain directory, Mono framework/runtime and entry-point requirements.
 - Regression-test custom-asmdef-only Players, missing standalone EXEs, resource filename variations, China version suffixes and IL2CPP rejection. This identifies Unity 2022 releases but does not extend MCP support beyond the validated 2022.3 family or guarantee customized game loading compatibility.
 
-## 0.7.1 — Unreleased
+## 0.7.1 — Development milestone, included in 0.8.0
 
 - Support older Unity 2022.3 Players that export `UnityMain` but not `UnityMain2`. Use the documented legacy ABI with a null previous-instance argument and link the host-derived data folder to the original Player resources under `.unidot/native-host`.
 - Preserve the original EXE/DLLs and game working directory. Regression-test legacy data staging and readback; verify MCP on the old BITFALL 2022.3.20f1 Mono build.
 
-## 0.7.0 — Unreleased
+## 0.7.0 — Development milestone, included in 0.8.0
 
 - Add `unidot mcp` as an Agent-owned stdio server for Windows x64 Unity 2022.3 Mono Players. Support direct `--player` / matching `--unity-editor`, existing configuration, Player arguments, and bounded startup readiness.
 - Inject a target-compiled external runtime through the bundled NativeHost, without modifying base Managed DLLs or requiring a preinstalled game executor. Use official ModelContextProtocol.Core 2.2.0 and a private per-session named pipe.
@@ -30,7 +33,7 @@
 - Keep stdout exclusively MCP, retain compiler/Player logs and artifacts, and stop the owned Player on Agent transport EOF, cancellation or CLI termination.
 - Add compiler isolation/cancellation and real SDK stdio regression coverage; accept the complete path on RuntimeProbe, including async Unity modifications and EOF cleanup. HTTP, process attachment, arbitrary game hot replacement and IL2CPP remain out of this scope.
 
-## 0.6.1 — Unreleased
+## 0.6.1 — Development milestone, included in 0.8.0
 
 - **Fixed:** exit and await the reusable Unity ILPP worker before deployment. Cecil caches inside NetRpc processors can retain Player DLL read handles; deploying before worker disposal caused repeatable sharing violations even after the game closed.
 - Keep the finally cleanup for failed/cancelled builds without double-disposing a completed host.

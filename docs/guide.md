@@ -4,6 +4,8 @@
 
 Unidot is an independent C# build, deployment, and runtime CLI for existing Mono Unity Players. It reads Unity assembly definitions, invokes Unity's Roslyn compiler, processes DLL/PDB outputs, and replaces game code in an existing Player.
 
+Current release: **0.8.0 Alpha**. For Agent-owned stdio sessions with runtime C# compilation/execution, see [Agent MCP sessions](mcp.md).
+
 ## Development workflow
 
 Run commands from the built Player's directory:
@@ -367,7 +369,7 @@ unidot watch --no-deploy --verbose
 
 ## Build, test, and distribute
 
-From the repository root, with .NET 8+ SDK:
+From the repository root, with .NET 8+ SDK and x64 TinyCC 0.9.27. Set `UNIDOT_TCC` to `tcc.exe` or put it on PATH; see [original-EXE bridge setup](mcp.md#building-the-original-exe-bridge). Release packages contain the compiled bridge, so end users do not need a C compiler.
 
 ```powershell
 dotnet build Unidot.sln

@@ -21,13 +21,13 @@ unidot run
 
 ### 1. Install
 
-Download `Net.BITKit.Unidot.0.6.0.nupkg` from the [v0.6.0 Alpha release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.6.0) into a local `packages` directory, then install:
+Download `Net.BITKit.Unidot.0.8.0.nupkg` from the [v0.8.0 Alpha release](https://github.com/CortexCore/Net.BITKit.Unidot/releases/tag/v0.8.0) into a local `packages` directory, then install:
 
 ```powershell
-dotnet tool install --global Net.BITKit.Unidot --version 0.6.0 --add-source ./packages
+dotnet tool install --global Net.BITKit.Unidot --version 0.8.0 --add-source ./packages
 ```
 
-Or extract `Unidot-v0.6.0-windows.zip` from the same release and add its directory to `PATH`. The ZIP requires .NET 8 Runtime; .NET Tool installation requires the SDK. Packages are distributed through GitHub Releases, not currently through nuget.org. Existing installations can use `dotnet tool update --global` with the same version/source; close active Unidot sessions before replacing the installed tool.
+Or extract `Unidot-v0.8.0-windows.zip` from the same release and add its directory to `PATH`. The ZIP requires .NET 8 Runtime; .NET Tool installation requires the SDK. Packages are distributed through GitHub Releases, not currently through nuget.org. Existing installations can use `dotnet tool update --global` with the same version/source; close active Unidot sessions before replacing the installed tool.
 
 ### 2. Link your source
 
@@ -81,13 +81,13 @@ Player arguments go after `--`, for example `unidot run -- --mode=no-init`. See 
 
 Source builds reuse Unity's Roslyn compiler server and an ILPP worker by default. Per-assembly timings appear in the console and `.unidot/build-report.json`; use `--no-shared` / `--isolated-ilpp` for isolated-process diagnostics. See [build performance](docs/guide.md#build-performance).
 
-## Agent MCP (0.8.0 development build)
+## Agent MCP (0.8.0 Alpha)
 
 ```powershell
 unidot mcp --player "D:\Games\MyGame.Build" --unity-editor "C:\Program Files\Unity\Hub\Editor\2022.3.62f3"
 ```
 
-Configure the Agent to launch this as a **stdio MCP server**. Unidot starts the original Player EXE in the background, injects the runtime, and exposes `runtime_status`, `compile_code`, `execute_compiled`, and `execute_code`. Compiler/Player logs go to stderr; closing Agent stdin stops the owned Player. Windows x64 Unity 2022 Mono is the current target; live acceptance covers 2022.3.14f1c1, 2022.3.20f1 and 2022.3.62f3. See [Agent configuration and code examples](docs/mcp.md). This command is not included in the published 0.6.0 release.
+Configure the Agent to launch this as a **stdio MCP server**. Unidot starts the original Player EXE in the background, injects the runtime, and exposes `runtime_status`, `compile_code`, `execute_compiled`, and `execute_code`. Compiler/Player logs go to stderr; closing Agent stdin stops the owned Player. Windows x64 Unity 2022 Mono is the current target; live acceptance covers 2022.3.14f1c1, 2022.3.20f1 and 2022.3.62f3. See [Agent configuration and code examples](docs/mcp.md).
 
 ## Lightweight agent workspaces
 
